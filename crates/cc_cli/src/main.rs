@@ -239,11 +239,12 @@ struct Player {
     y: f32,
     w: f32,
     h: f32,
+    vx: f32,
     vy: f32,
+    phase: f32,
     on_ground: bool,
 }
 
-const GRAVITY: f32 = 0.35;
 const MAX_FALL: f32 = 6.5;
 const RUN: f32 = 1.6;
 const JUMP: f32 = 6.2;
@@ -255,7 +256,9 @@ impl Player {
             y,
             w,
             h,
+            vx: 0.0,
             vy: 0.0,
+            phase: 0.0,
             on_ground: false,
         }
     }
@@ -270,7 +273,9 @@ impl Player {
         // Horizontal: continuous world-space check along the leading edge.
         // Sample the lower/middle body (feet - 2, feet - 8) so overhead floating blocks
         // that still have vertical clearance above the ground can be walked under.
-        self.x += dir * RUN;
+        self.vx = dir * RUN;
+        self.x += self.vx;
+        self.phase += self.vx.abs() * 0.24;
         if dir != 0.0 {
             let lead = if dir > 0.0 { self.x + self.w - 1.0 } else { self.x };
             let feet = self.y + self.h;
@@ -287,12 +292,17 @@ impl Player {
         }
         self.x = self.x.max(0.0);
 
-        // Vertical.
+        // Vertical: environmental acceleration field from model manifest.
+        let g = if m.manifest.gravity > 0.0 {
+            m.manifest.gravity * 0.73
+        } else {
+            0.35
+        };
         if jump && self.on_ground {
             self.vy = -JUMP;
             self.on_ground = false;
         }
-        self.vy = (self.vy + GRAVITY).min(MAX_FALL);
+        self.vy = (self.vy + g).min(MAX_FALL);
         let prev_feet = self.y + self.h;
         self.y += self.vy;
         self.on_ground = false;
@@ -426,6 +436,7 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
             cde: cc_math::CliffordDensityElement,
             trajectory: std::collections::HashMap<usize, (i32, i32)>,
             sprite: Option<image::RgbaImage>,
+            phase: f32,
         }
 
         // Build the continuous Clifford Quantum Potential field Q_Cl = -(∇²R)/R
@@ -459,6 +470,7 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                     cde: cc_math::CliffordDensityElement::new(1.0, 0.0, 0, 3, t.color),
                     trajectory,
                     sprite,
+                    phase: 0.0,
                 }
             })
             .collect();
@@ -474,6 +486,8 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                     if let Some((px, py)) = h.pos {
                         let dx = tx as f64 - px;
                         let dy = ty as f64 - py;
+                        let ds = (dx * dx + dy * dy).sqrt() as f32;
+                        h.phase += ds * 0.40;
                         if dx * dx + dy * dy > 0.25 && dx.abs() < (aw as f64 * 0.5) {
                             h.cde.set_heading_angle(dy.atan2(dx));
                         }
@@ -486,6 +500,8 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                     let [gx, gy] = qfield.gradient_at(ux, uy);
                     h.cde.apply_quantum_torque([-gx * 0.001, -gy * 0.001], 0.2);
                     let [vx, vy] = h.cde.bohm_momentum(1.0);
+                    let ds = (vx * vx + vy * vy).sqrt() as f32;
+                    h.phase += ds * 0.40;
                     let nx = (px + vx).rem_euclid(aw.max(1) as f64);
                     let ny = (py + vy).clamp(0.0, (ah.saturating_sub(1)) as f64);
                     let cx = (nx + h.size[0] * 0.5) as f32;
@@ -587,7 +603,7 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                 let theta = (hy as f32).atan2(hx as f32);
                 let moving = hx * hx + hy * hy > 0.04;
                 let chomp_open = if moving {
-                    ((frame as f32 * 0.45).sin().abs()) * 0.95
+                    ((h.phase).sin().abs()) * 0.95
                 } else {
                     0.20
                 };
@@ -596,7 +612,7 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
 
                 let eye_dx = if hx > 0.3 { 1 } else if hx < -0.3 { -1 } else { 0 };
                 let eye_dy = if hy > 0.3 { 1 } else if hy < -0.3 { -1 } else { 0 };
-                let skirt_shift = ((frame / 6) % 2) as i32;
+                let skirt_shift = ((h.phase * 0.4).sin().signum().max(0.0)) as i32;
 
                 for sy in 0..sh {
                     let dy = ay + sy;
@@ -1615,7 +1631,7 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
             let sy_off = (py + player.h as i32) - sh;
             let sx_off = px + (player.w as i32 - sw) / 2;
             let is_jumping = !player.on_ground;
-            let walk_cycle = (frame / 4) % 3;
+            let walk_cycle = ((player.phase * 0.8).sin() * 1.5).round() as i32;
             for sy in 0..sh {
                 let dy = sy_off + sy;
                 if dy < 0 || dy >= vh as i32 {
@@ -1633,14 +1649,10 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                         if sy < sh / 2 && sy > 1 {
                             src_y = (sy + 1).min(sh - 1);
                         }
-                    } else if player.on_ground {
+                    } else if player.on_ground && player.vx.abs() > 0.1 {
                         let is_leg = sy >= (sh * 3) / 4;
                         if is_leg {
-                            if walk_cycle == 1 {
-                                src_x = (sx + 1).min(sw - 1);
-                            } else if walk_cycle == 2 {
-                                src_x = (sx - 1).max(0);
-                            }
+                            src_x = (sx + walk_cycle).clamp(0, sw - 1);
                         }
                     }
                     let p = sprite.get_pixel(src_x as u32, src_y as u32);
