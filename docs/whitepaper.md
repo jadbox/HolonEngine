@@ -68,6 +68,18 @@ $$T_{s \to s'} = \epsilon_{s'}\,M\,\epsilon_s$$
 | **Upward Boundary Impulse** | $P_{\text{actor}} \wedge L_{\text{prop,bottom}} = 0,\; \mathbf{P}_B \cdot e_2 < 0$ | Prop $T_{0 \to 1 \to 2}$, emits excitation token | Striking a floating block from below triggers harmonic displacement and token emission. |
 | **Field Excitation Absorption** | $P_{\text{actor}} \cap B_{\text{excitation}} \neq \varnothing$ | Excitation $T_{0 \to 2}$ ($\rho \to 0$) | Passing through a corridor dot, pellet, or coin absorbs the excitation into actor energy. |
 
+### 2.4 Abstract Attached Process Effects & Medium Excitations
+Rather than hardcoding ad-hoc visual particle routines or game-specific cosmetic emitters (e.g., jet nozzles, foot dust, or muzzle flashes), `HolonEngine` models all secondary visual phenomena as **Abstract Attached Process Excitations** coupled directly to a holon's boundary blades $B_i$, heading rotor $U_i$, and Bohm momentum $\mathbf{P}_{B,i}$:
+
+1. **Attached Trailing Wakes (`AttachedWake`):**
+   Emanates from the holon's trailing boundary blade $\mathbf{p}_{\text{tail}} = \mathbf{p}_{\text{center}} - \frac{1}{2}h\,\mathbf{s}_i$ opposite to the heading vector $-\mathbf{s}_i$. Characterized by process lifetime $\tau$, velocity $\mathbf{v}_{\text{wake}} \propto -\mathbf{s}_i$, and dispersion radius $r(t)$. Generalizes across aero/fluid thrusters, vessel wakes, running dust, and particle trails.
+2. **Soliton Directional Projectiles (`SolitonProjectile`):**
+   Emitted along the leading boundary blade $\mathbf{p}_{\text{lead}} = \mathbf{p}_{\text{center}} + \frac{1}{2}h\,\mathbf{s}_i$, propagating as a coherent solitary excitation with velocity $\mathbf{v} = v_0\,\mathbf{s}_i$.
+3. **Radial Field Dispersions (`RadialDispersion`):**
+   Triggered on state idempotent collapse $T_{s \to \text{collapsed}}$, dissipating stored internal process energy radially into the medium with harmonic expansion $r(t) = r_0 + \alpha\,t$.
+4. **Consumable Field Excitations (`FieldExcitation`):**
+   Discrete localized minimal left ideals embedded in the spatial medium ($B_{\text{excitation}} \in \mathbb{G}_{3,0,1}$), which annihilate ($\rho \to 0$) upon projective incidence with a primary holon.
+
 ---
 
 ## 3. Active Information & The Clifford Quantum Potential (`cc_field::potential`)
@@ -88,7 +100,9 @@ $$\mathcal{Q}_{\text{Cl}} = -(\nabla^2 \Psi)\Psi^{-1} = \underbrace{-\frac{\nabl
 1. **Scene Stability Segmentation (`detect_playfield_segment`):**
    Scans the video stream for the longest contiguous run of active frames sharing a stable border backdrop mode, automatically stripping title screens, menus, and attract-mode cuts.
 2. **Spectral Camera Regime Discovery (`detect_camera_is_static`, `ScrollEstimator`):**
-   Evaluates 2D FFT cross-power phase correlation across the playfield band. Near-zero cumulative drift ($\max |\Delta \mathbf{X}_{\text{cam}}| \le 4\text{ px}$) selects the static arena regime (`Ortho2D-Static`), while translational flow selects scrolling odometry (`Ortho2D-Scroll`) refined to pixel lock via $\pm 1\text{ px}$ local SSAD.
+   Evaluates 2D FFT cross-power phase correlation across the playfield band. Near-zero cumulative drift ($\max |\Delta \mathbf{X}_{\text{cam}}| \le 4\text{ px}$) selects the static arena regime (`Ortho2D-Static`), while translational flow selects scrolling odometry (`Ortho2D-Scroll`). In $\mathbb{G}_{3,0,1}$, odometry is parameterized uniformly by the translational camera ego motor:
+   $$M_{\text{ego}}(t) = \exp\left(-\frac{1}{2}(v_x e_{01} + v_y e_{02})\Delta t\right)$$
+   distinguishing horizontal side-scrolling ($|v_x| \gg |v_y|$ with $g_y > 0$) from vertical flight corridors ($|v_y| \gg |v_x|$ with $g_y = 0$). Offsets are refined to single-pixel lock via local SSAD.
 3. **Topological Boundary & Collectible Separation (`extract_2d_tiles_with`):**
    * Learns the backdrop color from the border mode.
    * In scrolling worlds with a continuous floor (`has_ground`), extracts the per-column ground surface, raised terrain steps, and flat-topped `OneWay` shelves (pipes, platforms, floating blocks) while relegating curved shapes (clouds, hills, bushes) to `Background`.
@@ -129,4 +143,23 @@ In accordance with `docs/storybook_philosophy.md` (§1.1, §4.2), the fundamenta
 
 3. **Bragg Lattice Snapping as an Optional Spectral Regularizer:**
    When the 2D CFT of the temporal-mode world atlas $\hat{A}(k_x, k_y)$ exhibits sharp Bragg peaks at $(k_{\text{tile},x}, k_{\text{tile},y}) = (2\pi/\lambda_x, 2\pi/\lambda_y)$ with peak-to-median spectral energy exceeding threshold $\tau_{\text{Bragg}}$, Active-GATr applies the Manhattan/lattice regularizer (Term 1 of $\mathcal{E}_{\text{GATr}}$) to snap noisy pixel contours onto the discovered period $(\lambda_x, \lambda_y)$. When no Bragg peak is present (continuous/non-tile 2D games), $\tau_{\text{Bragg}}$ is not met and boundaries remain unquantized continuous PGA contours in $\mathbb{G}_{3,0,1}$.
+
+### 5.2 Empirical Systems Laws Discovered from Benchmark Unfoldment
+
+1. **The Quantization Phantom Trap (1-Pixel Outline Bleed):**
+   * **Phenomenon:** Sprite and block artwork frequently includes a 1-pixel dark outline outside the nominal geometry (e.g., `x = 175..208` around a `176..207` block). Naive cell-overlap predicates (`tx1 >= c.x0 && tx0 <= c.x1`) promote the entire adjacent empty-space tile (`16 px` wide) into a solid/one-way surface, creating invisible phantom ledges in open air that premature jumps collide with.
+   * **Law:** Geometric blades $B_k \in \mathbb{G}_{3,0,1}$ must never be dilated by grid quantization. Optional cell classification requires fractional overlap $\mu(C \cap \text{cell}) \ge 4\text{ px}$, while runtime incidence operates on continuous contour bounds.
+
+2. **Visual-Physical Support Coincidence (No Detached Hitboxes):**
+   * **Phenomenon:** Using a fixed physics hitbox (`12 x 16`) with a learned sprite canvas (`18 x 28`) violates projective incidence ($P_{\text{head}} \wedge L_{\text{bottom}} = 0$): the physics solver halts at one coordinate while the rendered silhouette either penetrates 12 px inside an overhead block or appears to trigger an impact in empty space.
+   * **Law:** Every holon's PGA bounding blade $(w_i, h_i)$ must be derived directly from its learned canonical silhouette (`TrackRecord::size`), guaranteeing that physical boundary incidence and visual contact coincide to the pixel.
+
+3. **Anisotropic Permeability of Suspended Boundaries:**
+   * **Phenomenon:** A tall holon walking beneath a low-hanging suspended block (`is_open_below_rect == true`) will be blocked horizontally if its upper-body leading edge treats all boundaries as 4-sided solids.
+   * **Law:** Suspended boundaries with open backdrop underneath are directionally semi-permeable: they arrest downward motion on $L_{\text{top}}$ ($v_y > 0$) and trigger upward impulse transitions $T_{0 \to 1 \to 2}$ on $L_{\text{bottom}}$ ($v_y < 0$), while horizontal wall impedance is sampled along the lower-body support $[y_{\text{feet}} - h_{\text{step}},\, y_{\text{feet}}]$.
+
+4. **Multi-Body Overlap Composites vs. Fundamental Minimal Left Ideals:**
+   * **Phenomenon:** When two actors cross paths in a corridor, connected-component residual segmentation yields a transient bounding box of area $\text{area}_{i+j} > \frac{3}{2}\text{area}_0$ and blended color spinor $\frac{1}{2}(\psi_i + \psi_j)$.
+   * **Law:** Fundamental holons correspond to persistent minimal left ideals. Short-lived tracks ($T < \frac{1}{3}T_{\max}$) with super-primary area ($\text{area} > \frac{3}{2}\text{area}_0$) are tensor-product overlap composites and must be factored by spinor projection or rejected.
+
 

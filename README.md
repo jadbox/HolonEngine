@@ -42,14 +42,17 @@ cargo build --release
 # 1. Enfold raw gameplay videos into self-contained .cc world models (no rules file required)
 ./target/release/cc enfold example_input2d/smb3_w1_1_256x240.mp4 -o example_input2d/smb3.cc
 ./target/release/cc enfold example_input2d_pacman/pacman_240x308.mp4 -o example_input2d_pacman/pacman.cc
+./target/release/cc enfold example_input2d_raptor/raptor_320x240.mp4 --start 0 --duration 25 -o example_input2d_raptor/raptor.cc
 
 # 2. Inspect a compiled .cc model (manifest metadata, boundary layout, and diagnostic PNG dumps)
 ./target/release/cc inspect example_input2d/smb3.cc --atlas /tmp/smb3_atlas.png --tiles /tmp/smb3_tiles.png
 ./target/release/cc inspect example_input2d_pacman/pacman.cc --atlas /tmp/pacman_atlas.png
+./target/release/cc inspect example_input2d_raptor/raptor.cc --atlas /tmp/raptor_atlas.png
 
 # 3. Unfold a compiled .cc model forward at >2,000 Hz and record MP4 verification demos
 ./target/release/cc unfold example_input2d/smb3.cc -o recordings/task_demo_smb3_playable.mp4
 ./target/release/cc unfold example_input2d_pacman/pacman.cc -o recordings/task_demo_pacman_replay.mp4
+./target/release/cc unfold example_input2d_raptor/raptor.cc -o recordings/task_demo_raptor_playable.mp4
 
 # 4. Step a live 2D Clifford wave + Q_Cl potential field with inertial boats
 ./target/release/cc sim --grid 128 --frames 240 --boats 6 -o /tmp/qcl_sim.mp4
@@ -63,6 +66,7 @@ cargo build --release
 | :--- | :--- | :--- | :--- | :--- |
 | **Super Mario Bros. 3 (W1-1)** | `Ortho2D-Scroll` ($g_y > 0$) | [`example_input2d/smb3.cc`](./example_input2d/smb3.cc) | [`recordings/task_demo_smb3_playable.mp4`](./recordings/task_demo_smb3_playable.mp4) | $> 2,800\text{ Hz}$ headless |
 | **Pac-Man (Arcade)** | `Ortho2D-Static` ($g_y = 0$) | [`example_input2d_pacman/pacman.cc`](./example_input2d_pacman/pacman.cc) | [`recordings/task_demo_pacman_replay.mp4`](./recordings/task_demo_pacman_replay.mp4) | $> 2,200\text{ Hz}$ headless |
+| **Raptor: Call of the Shadows** | `Ortho2D-Vertical` ($g = 0$) | [`example_input2d_raptor/raptor.cc`](./example_input2d_raptor/raptor.cc) | [`recordings/task_demo_raptor_playable.mp4`](./recordings/task_demo_raptor_playable.mp4) | $> 2,600\text{ Hz}$ headless |
 
 ---
 

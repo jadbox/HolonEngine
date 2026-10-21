@@ -39,10 +39,12 @@ impl Rules2D {
         let mut r = Self::default();
         for line in s.lines() {
             let l = line.trim();
-            // Regime: Ortho2D-Static or Ortho2D-Scroll
+            // Regime: Ortho2D-Static or Ortho2D-Scroll or Ortho2D-Vertical
             if l.contains("Regime") {
                 if l.contains("Ortho2D-Static") {
                     r.regime = Some("Ortho2D-Static".to_string());
+                } else if l.contains("Ortho2D-Vertical") || l.contains("Vertical") || l.contains("Shmup") {
+                    r.regime = Some("Ortho2D-Vertical".to_string());
                 } else if l.contains("Ortho2D") {
                     r.regime = Some("Ortho2D-Scroll".to_string());
                 }
@@ -77,17 +79,21 @@ impl Rules2D {
                     }
                 }
             }
-            // Bottom HUD bar: y > 288 or y >= 192
+            // Bottom HUD bar: y > 288 or y >= 192, or None
             if l.contains("Bottom HUD") || l.contains("bottom HUD") || l.contains("HUD panel") {
-                for pat in &["y > ", "y >= ", "y \\ge ", "y >="] {
-                    if let Some(pos) = l.find(pat) {
-                        let num_str: String = l[pos + pat.len()..]
-                            .chars()
-                            .take_while(|c| c.is_ascii_digit())
-                            .collect();
-                        if let Ok(val) = num_str.parse() {
-                            r.hud_top = Some(val);
-                            break;
+                if l.contains("None") {
+                    r.hud_top = Some(usize::MAX);
+                } else {
+                    for pat in &["y > ", "y >= ", "y \\ge ", "y >="] {
+                        if let Some(pos) = l.find(pat) {
+                            let num_str: String = l[pos + pat.len()..]
+                                .chars()
+                                .take_while(|c| c.is_ascii_digit())
+                                .collect();
+                            if let Ok(val) = num_str.parse() {
+                                r.hud_top = Some(val);
+                                break;
+                            }
                         }
                     }
                 }
@@ -128,6 +134,10 @@ impl Rules2D {
 
     pub fn is_static(&self) -> bool {
         self.regime.as_deref() == Some("Ortho2D-Static")
+    }
+
+    pub fn is_vertical(&self) -> bool {
+        self.regime.as_deref() == Some("Ortho2D-Vertical")
     }
 }
 

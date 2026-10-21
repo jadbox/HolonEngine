@@ -224,7 +224,11 @@ impl Model2D {
             });
         }
         let has_ground_plane = level.tiles.ground_top < level.atlas.image.height as i32;
-        let gravity = if has_ground_plane { 0.48 } else { 0.0 };
+        let rules = crate::rules2d::Rules2D::try_find_for_video(Path::new(source));
+        let gravity = rules
+            .as_ref()
+            .and_then(|r| r.gravity)
+            .unwrap_or_else(|| if has_ground_plane { 0.48 } else { 0.0 });
         let manifest = ModelManifest {
             version: VERSION,
             source: source.to_string(),
@@ -274,8 +278,8 @@ impl Model2D {
         out.extend_from_slice(&(atlas_png.len() as u32).to_le_bytes());
         out.extend_from_slice(&atlas_png);
         let hud_png = match &self.hud {
-            Some(hud) => encode_rgb_as_png(hud)?,
-            None => Vec::new(),
+            Some(hud) if hud.height > 0 && hud.width > 0 => encode_rgb_as_png(hud)?,
+            _ => Vec::new(),
         };
         out.extend_from_slice(&(hud_png.len() as u32).to_le_bytes());
         out.extend_from_slice(&hud_png);
@@ -367,7 +371,10 @@ impl Model2D {
 
     /// PNG bytes of the HUD strip (re-encoded on demand).
     pub fn hud_png(&self) -> io::Result<Option<Vec<u8>>> {
-        self.hud.as_ref().map(encode_rgb_as_png).transpose()
+        match &self.hud {
+            Some(hud) if hud.height > 0 && hud.width > 0 => encode_rgb_as_png(hud).map(Some),
+            _ => Ok(None),
+        }
     }
 
     /// Decode sprite `i` to RGBA.

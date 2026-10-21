@@ -82,6 +82,12 @@ Ready for Phase 3 (3D Raycast Compiler & Wolfenstein 3D Extraction).
 - [X] Interactive coin boxes (`?` blocks): upward head hit detection, bump displacement, coin pop, spent transition
 - [X] Model saved into source example folder: `example_input2d/smb3.cc`
 
+## Next Generalization Tasks (Phase 2.5)
+- [ ] **Unified Continuous `WorldState2D` Step:** Merge the `gravity == 0.0` planar arena loop and `gravity > 0.0` gravitational loop in `cc_cli` into a single `WorldState2D::step` parameterized continuously by `manifest.gravity` and `FieldExcitation` holons.
+- [ ] **Spinor Pixel Factorization During Multi-Actor Occlusions:** Split compound residual blobs ($\text{area} > 1.5\,\text{area}_0$) in Pass 2 by projecting pixels onto the nearest open track's chromatic spinor $\psi_k$.
+- [ ] **Trajectory-Fitted Kinematic Constants (`gravity`, `run_speed`, `jump_impulse`):** Fit downward parabolic acceleration $\Delta^2 y_t$, horizontal cruise speed, and jump impulse directly from the extracted `Player` trajectory in `enfold2d`.
+- [ ] **2D+t CFT Sprite Walk-Cycle Kernel ($\omega_0, \omega_1$ modes):** Store the first temporal harmonic $\omega_1$ alongside $\omega_0$ in `.cc` sprite payloads.
+
 ## Exit-gate status (plan §Phase 2)
 - [X] HUD partition: detected at y=193 (exact), HUD image matches frame 0 with
       mean error < 10 / 255.

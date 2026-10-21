@@ -60,7 +60,7 @@ holonengine/
 Compute the 2D spatial CFT cross-power spectrum $\frac{\hat{I}_t \hat{I}_{t-1}^*}{|\hat{I}_t \hat{I}_{t-1}^*|}$ across viewport blocks:
 * **Regime Check:** Measure radial optical-flow divergence $\nabla \cdot \mathbf{v}_{\text{flow}}$. Near-zero divergence selects the **2D Orthographic Pipeline** (`CameraMode::Ortho2D`); horizon-symmetric vertical scaling selects the **3D Perspective Pipeline** (`CameraMode::Perspective3D`).
 
-#### Branch 2A: 2D Orthographic Pipeline (`example_input2d`)
+### 2D Orthographic Pipeline (`example_input2d`)
 1. **Sub-Pixel Scroll Odometry (`estimate_2d_scroll`):** Inverse FFT of the cross-power spectrum between consecutive viewports yields exact camera translation $(\Delta x_t, \Delta y_t)$ and cumulative world camera pose $(X_{\text{cam}}(t), Y_{\text{cam}}(t))$.
 2. **Ghost-Free Temporal Median Atlas (`build_2d_world_atlas`):** Map every viewport frame into world coordinates $(X, Y) = (x + X_{\text{cam}}(t), y + Y_{\text{cam}}(t))$. Take the **per-pixel temporal median RGB** across all frames visiting $(X, Y)$. Transient moving actors (Mario, Goombas, Koopas, items) vanish automatically, producing a clean, static level panorama.
 3. **Actor Residual Tubes (`extract_2d_actors`):** Threshold the difference $|I(x, y, t) - \text{Atlas}(x + X_{\text{cam}}(t), y + Y_{\text{cam}}(t))| > \tau_{\text{diff}}$, group connected components, and link actor trajectories $(X_i(t), Y_i(t), w_i, h_i)$ across frames via Hungarian bounding-box + CFT phase matching.
@@ -70,26 +70,27 @@ Compute the 2D spatial CFT cross-power spectrum $\frac{\hat{I}_t \hat{I}_{t-1}^*
      * **Solid Tile (ground, pipe, brick, `?` block):** arrests downward velocity ($v_y > 0 \to 0$ on $L_{\text{top}}$), blocks upward head hits ($v_y < 0 \to 0$ on $L_{\text{bottom}}$), and reverses horizontal actor motion ($v_x \to -v_x$ on $L_{\text{left/right}}$).
      * **One-Way Semisolid Platform (pastel screw-boxes):** arrests downward landing on $L_{\text{top}}$ while allowing upward passage ($v_y < 0$) through its interior and bottom edge.
 
-#### Branch 2B: 3D Perspective Pipeline (`example_input3d`)
+### Stage 3 — Canonical Sprite Unwarping & 2D+t CFT Vitality Kernels (`extract_canonical_sprite_cft`)
+* For each tracked actor state segment (e.g., Mario run/jump, Goomba walk, Wolf3D guard patrol/shoot), resample the actor crop sequence into a canonical rest grid.
+* Compute the 2D+t CFT $\hat{K}_{i,s}(k_x, k_y, \omega)$ and retain the top $M$ spectral modes (storing spatial silhouette/albedo in $\omega = 0$ and periodic limb/walk oscillation in $\omega_1 \dots \omega_M$).
+
+### Stage 4 — Active-GATr State-Transition Binding (`compile_transitions`) (REASSESS IF GATR IS NEEDED FOR STATE CHANGE)
+* Bind observed state transitions $\epsilon_s \to \epsilon_{s'}$ to PGA geometric incidence predicates and semantic spinor alignment $\mathcal{A}_{ij}$:
+  * **2D Predicates:** `TopStomp` ($P_{\text{player\_foot}} \wedge L_{\text{enemy\_top}}$ with $v_y > 0$), `BottomBump` ($P_{\text{player\_head}} \wedge L_{\text{block\_bottom}}$ with $v_y < 0$), `SideHit` ($P_{\text{player}} \wedge L_{\text{enemy\_side}}$).
+
+
+### Stage 5 — `llama.cpp` VLM + Wording-Space Spinor Projection (`cc_gatr`) (FEATURE ON HOLD)
+* Run `llama-mtmd-cli` / `llama-server` with `--temp 0 --seed 42` and a strict GBNF grammar (`holon_schema.gbnf`) on a contact sheet of extracted tiles and canonical actor sprites to assign canonical labels (`mario`, `goomba`, `koopa`, `question_block`, `guard`, `sliding_door`, `hud_bar`) and state names.
+* Run `llama-embedding` on VLM descriptions and `rules.md` clauses; compute the thin SVD of the normalized Gram matrix $S_{ij} = \langle \hat{e}_i, \hat{e}_j \rangle$ to map each Holon and rule into a $K$-channel spinor $\psi_i = R_i e^{\theta_i e_{12}} \in (\mathbb{G}_{2,0}^+)^K$.
+
+### Stage 6: 3D Perspective Pipeline (`example_input3d`) (FEATURE ON HOLD)
 1. **Horizon-Symmetric Column Depth (`extract_column_depth`):** Locate the viewport horizon $y_h = H_{\text{view}}/2$ separating flat ceiling (`#383838`) and floor (`#707070`). For each column $x$, measure the symmetric vertical wall span $h(x, t)$ around $y_h$ to obtain inverse projective depth $d(x, t) = f / h(x, t)$.
 2. **Foreground Sprite Residual Masking:** Columns where color/span breaks the local piecewise-linear $d(x, t)$ trend and moves independently of camera yaw are masked as 3D billboard actors (guards, lamps, pickups), and wall depth $d(x, t)$ is linearly interpolated behind them.
 3. **Log-Odds Manhattan Occupancy Map (`build_3d_raycast_map`):**
    * Estimate incremental camera yaw $\Delta \theta_t$ from horizontal shift of column spans and forward translation $\Delta s_t$ from radial expansion $\dot{d}(x, t) / d(x, t)$.
    * Cast each column ray $(P_{\text{cam}}(t), \theta_t + \alpha_x, z(x, t))$ into a 2D world grid quantized by the wall CFT period $\lambda_{\text{tile}}$. Accumulate log-odds free space along the ray and orthogonal wall/door `Plane` normals ($\pm e_1, \pm e_2$) at the termination cell.
 4. **Inverse-Perspective Texture Rectification (`extract_wall_textures`):** Resample frontal wall and cyan door spans vertically by $h(x, t) \to 64$ and horizontally along the wall plane to $64$, recovering crisp $64 \times 64$ wall and door textures.
-
-### Stage 3 — Canonical Sprite Unwarping & 2D+t CFT Vitality Kernels (`extract_canonical_sprite_cft`)
-* For each tracked actor state segment (e.g., Mario run/jump, Goomba walk, Wolf3D guard patrol/shoot), resample the actor crop sequence into a canonical rest grid ($32 \times 32$ for 2D sprites; $64 \times 64$ for 3D billboards).
-* Compute the 2D+t CFT $\hat{K}_{i,s}(k_x, k_y, \omega)$ and retain the top $M$ spectral modes (storing spatial silhouette/albedo in $\omega = 0$ and periodic limb/walk oscillation in $\omega_1 \dots \omega_M$).
-
-### Stage 4 — `llama.cpp` VLM + Wording-Space Spinor Projection (`cc_gatr`)
-* Run `llama-mtmd-cli` / `llama-server` with `--temp 0 --seed 42` and a strict GBNF grammar (`holon_schema.gbnf`) on a contact sheet of extracted tiles and canonical actor sprites to assign canonical labels (`mario`, `goomba`, `koopa`, `question_block`, `guard`, `sliding_door`, `hud_bar`) and state names.
-* Run `llama-embedding` on VLM descriptions and `rules.md` clauses; compute the thin SVD of the normalized Gram matrix $S_{ij} = \langle \hat{e}_i, \hat{e}_j \rangle$ to map each Holon and rule into a $K$-channel spinor $\psi_i = R_i e^{\theta_i e_{12}} \in (\mathbb{G}_{2,0}^+)^K$.
-
-### Stage 5 — Active-GATr State-Transition Binding (`compile_transitions`)
-* Bind observed state transitions $\epsilon_s \to \epsilon_{s'}$ to PGA geometric incidence predicates and semantic spinor alignment $\mathcal{A}_{ij}$:
-  * **2D Predicates:** `TopStomp` ($P_{\text{player\_foot}} \wedge L_{\text{enemy\_top}}$ with $v_y > 0$), `BottomBump` ($P_{\text{player\_head}} \wedge L_{\text{block\_bottom}}$ with $v_y < 0$), `SideHit` ($P_{\text{player}} \wedge L_{\text{enemy\_side}}$).
-  * **3D Predicates:** `UseDoor` ($\langle P_{\text{player}} \vee \Pi_{\text{door}} \rangle < r_{\text{use}} \land \text{Use}$), `EnemyAlert` ($(P_{\text{player}} \vee P_{\text{enemy}}) \wedge \Pi_{\text{wall}} = \varnothing$), `WeaponRayHit` ($L_{\text{aim}} \wedge \Pi_{\text{enemy}} \neq \varnothing \land \text{Fire}$).
+5.  **3D Predicates State-Transition:** `UseDoor` ($\langle P_{\text{player}} \vee \Pi_{\text{door}} \rangle < r_{\text{use}} \land \text{Use}$), `EnemyAlert` ($(P_{\text{player}} \vee P_{\text{enemy}}) \wedge \Pi_{\text{wall}} = \varnothing$), `WeaponRayHit` ($L_{\text{aim}} \wedge \Pi_{\text{enemy}} \neq \varnothing \land \text{Fire}$).
 
 ---
 
@@ -131,6 +132,14 @@ Compute the 2D spatial CFT cross-power spectrum $\frac{\hat{I}_t \hat{I}_{t-1}^*
 5. **Autonomous Actor Holons & Clifford Patrol / Stomp:** Modeled on Basil Hiley's process ontology (`crates/cc_math/src/holon.rs`, `CliffordDensityElement`). Entities inhabit minimal left ideals $\mathcal{I}_i = \mathcal{C}\ell \epsilon_i$ with density element $\rho_{c,i} = \Phi_{L,i}\widetilde{\Phi}_{L,i} = \rho_i U_i \epsilon_{i,s}\widetilde{U}_i$, bilinear heading $\mathbf{s}_i = U_i e_1 \widetilde{U}_i$, and Bohm momentum $\mathbf{P}_{B,i} = \rho_i v_{0,i} \mathbf{s}_i$. Principal mobility axis ($e_1$ vs $e_2$) and excursion bounds are inferred directly from the observed world-space excursion tensor `TrackRecord::span` without sprite-size heuristics. Lateral or vertical excursion boundary incidence triggers rotor reflection $U_i \mapsto N U_i \widetilde{N}$ and idempotent transition $T_{0 \leftrightarrow 1}$. Top-down relational incidence collapses the actor to $\epsilon_2$ ($\rho_i \to 0$) and imparts upward bounce restitution to the player. Demonstrated at $> 2500\text{ Hz}$ headless throughput (`recordings/task_demo_smb3_playable.mp4`).
 6. **Planar Zero-Gravity Arena Generalization (`example_input2d_pacman`):** Added spectral static-camera detection (`detect_camera_is_static`), topological 8-connected-component separation of extended maze walls ($\max(w, h) \ge 2 \times \text{tile}$) vs isolated corridor collectible excitations ($\max(w, h) \le \text{tile} + 4$, stored in `ModelManifest::collectibles`), chromatic-spinor-coherent actor tracking (`track_actors_coherent`) with toroidal warp-tunnel distance and composite-overlap rejection, and $\mathcal{Q}_{\text{Cl}}$-guided planar unfoldment (`recordings/task_demo_pacman_replay.mp4`) with zero game-specific RGB constants.
 7. **Tile-Free Continuous World Representation (`Model2D::solid_at_world`, `one_way_at_world`, `is_open_below_rect`, `build_continuous_qfield`):** Decoupled runtime collision and $\mathcal{Q}_{\text{Cl}}$ potential synthesis from discrete tile grids (`kinds: Vec<TileKind>`). Continuous world-space boundary rects/lines (`solids`, `platforms`, `collectibles`, `OrientedLine2`) are now the primary geometric representation so non-tile 2D games (vector arenas, freeform contours, curved slopes) execute with `tile = 0, kinds = []`, treating Bragg-lattice snapping strictly as an optional spectral prior when periodic CFT peaks exist.
+8. **Visual-Physical Support Coincidence & Phantom-Overhang Elimination:** Eliminated 1-px border bleed into adjacent empty tiles (`overlap >= 4 px`) and replaced hardcoded player hitbox constants (`PW`, `PH`, `head_ext`) with learned `TrackRecord::size` dimensions so upward block impacts and top-down stomps coincide to the pixel (`impacts=4, coins=1` on `smb3.cc`).
+9. **Top-Down & Vertical Flight Shmup Benchmark (`example_input2d_raptor`):** Generalized `Ortho2D-Scroll` to vertical translational camera ego motors ($M_{\text{ego}}(t) = \exp(-\frac{1}{2} v_y e_{02} \Delta t)$), decoupled zero-gravity scrolling worlds ($g = 0$) from 1D platformer jumping, added abstract attached process effects (`AttachedWake` trailing excitations along $-\mathbf{s}$, `SolitonProjectile` along $+\mathbf{s}$, `FieldExcitation` collectible absorption, and `RadialDispersion` burst on state idempotent collapse), enfolded *Raptor: Call of the Shadows* into `example_input2d_raptor/raptor.cc` (320x684 stitched level atlas, 12 actor tracks), and verified playable unfoldment at $> 2,600\text{ Hz}$ (`recordings/task_demo_raptor_playable.mp4`).
+
+#### Next Generalization Tasks (Phase 2.5 — Pre-3D Hardening)
+- [ ] **Unified Continuous `WorldState2D` Step:** Merge the `gravity == 0.0` planar arena loop and `gravity > 0.0` gravitational loop in `cc_cli` into a single `WorldState2D::step` parameterized continuously by `manifest.gravity` and `FieldExcitation` holons.
+- [ ] **Spinor Pixel Factorization During Multi-Actor Occlusions:** Split compound residual blobs ($\text{area} > 1.5\,\text{area}_0$) in Pass 2 by projecting pixels onto the nearest open track's chromatic spinor $\psi_k$, eliminating 2–5 frame occlusion gaps when actors cross paths.
+- [ ] **Trajectory-Fitted Kinematic Constants (`gravity`, `run_speed`, `jump_impulse`):** Fit downward parabolic acceleration $\Delta^2 y_t$, horizontal cruise speed, and jump impulse directly from the extracted `Player` trajectory in `enfold2d` instead of using default constants.
+- [ ] **2D+t CFT Sprite Walk-Cycle Kernel ($\omega_0, \omega_1$ modes):** Store the first temporal harmonic $\omega_1$ alongside the static mode $\omega_0$ in `.cc` sprite payloads for spectral limb/chomp animation synthesis.
 
 
 ### Phase 3: 3D Raycast Compiler & Wolfenstein 3D Extraction (`cc_field` 3D)

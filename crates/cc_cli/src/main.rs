@@ -397,9 +397,10 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
     let model = Model2D::load(Path::new(path))?;
     let m = &model.manifest;
     let is_static = m.gravity <= 0.0 && m.scroll.iter().all(|s| s[0] == 0 && s[1] == 0);
+    let is_flight = m.gravity <= 0.0 && !m.scroll.iter().all(|s| s[0] == 0 && s[1] == 0);
     let frames: usize = opt(args, "--frames")
         .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| if is_static { m.scroll.len() } else { 600 });
+        .unwrap_or_else(|| if is_static || is_flight { m.scroll.len().max(600) } else { 600 });
     let capture = opt(args, "--capture").map(PathBuf::from);
     let no_video = args.iter().any(|a| a == "--no-video");
     let out = opt(args, "-o").map(PathBuf::from);
@@ -580,6 +581,23 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                 let ay = fy.round() as i32;
                 let sw = sprite.width() as i32;
                 let sh = sprite.height() as i32;
+
+                // Heading rotor and vitality harmonics
+                let [hx, hy] = h.cde.heading_vector();
+                let theta = (hy as f32).atan2(hx as f32);
+                let moving = hx * hx + hy * hy > 0.04;
+                let chomp_open = if moving {
+                    ((frame as f32 * 0.45).sin().abs()) * 0.95
+                } else {
+                    0.20
+                };
+                let cx = sw as f32 * 0.5;
+                let cy = sh as f32 * 0.5;
+
+                let eye_dx = if hx > 0.3 { 1 } else if hx < -0.3 { -1 } else { 0 };
+                let eye_dy = if hy > 0.3 { 1 } else if hy < -0.3 { -1 } else { 0 };
+                let skirt_shift = ((frame / 6) % 2) as i32;
+
                 for sy in 0..sh {
                     let dy = ay + sy;
                     if dy < 0 || dy >= vh as i32 {
@@ -590,7 +608,46 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                         if dx < 0 || dx >= vw as i32 {
                             continue;
                         }
-                        let p = sprite.get_pixel(sx as u32, sy as u32);
+
+                        // Primary holon: dynamic wedge chomp aligned with heading rotor
+                        if ti == 0 && chomp_open > 0.08 {
+                            let diff_x = sx as f32 - cx;
+                            let diff_y = sy as f32 - cy;
+                            let dist = (diff_x * diff_x + diff_y * diff_y).sqrt();
+                            if dist >= 1.5 && dist <= cx.max(cy) + 2.0 {
+                                let ang = diff_y.atan2(diff_x);
+                                let d_theta = (ang - theta + std::f32::consts::PI)
+                                    .rem_euclid(2.0 * std::f32::consts::PI)
+                                    - std::f32::consts::PI;
+                                if d_theta.abs() < chomp_open {
+                                    continue; // open mouth wedge
+                                }
+                            }
+                        }
+
+                        // Autonomous holons: skirt wave at bottom boundary
+                        let sample_x = if ti > 0 && sy >= sh - 3 {
+                            (sx + skirt_shift).rem_euclid(sw)
+                        } else {
+                            sx
+                        };
+
+                        let mut p = sprite.get_pixel(sample_x as u32, sy as u32);
+
+                        // Autonomous holons: gaze shift according to heading
+                        if ti > 0 && (eye_dx != 0 || eye_dy != 0) {
+                            let is_eye = p[0] > 200 && p[1] > 200 && p[2] > 200;
+                            let is_pupil = p[0] < 60 && p[1] < 60 && p[2] > 140;
+                            if is_eye || is_pupil {
+                                let shifted_x = (sx - eye_dx).clamp(0, sw - 1);
+                                let shifted_y = (sy - eye_dy).clamp(0, sh - 1);
+                                let sp = sprite.get_pixel(shifted_x as u32, shifted_y as u32);
+                                if sp[0] < 60 && sp[1] < 60 && sp[2] > 140 {
+                                    p = sp; // shifted pupil
+                                }
+                            }
+                        }
+
                         let alpha = p[3] as u32;
                         if alpha >= 100 {
                             let i = (dy as usize * vw + dx as usize) * 3;
@@ -631,6 +688,567 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                 px, py
             );
         }
+        if let Some(dir) = &capture {
+            println!("captured {captured} frames -> {}", dir.display());
+        }
+        if let Some(p) = &out {
+            println!("video -> {}", p.display());
+        }
+        return Ok(());
+    }
+
+    if is_flight {
+        /// An autonomous entity in the continuous spatial medium.
+        struct AutonomousHolon {
+            x: f32,
+            y: f32,
+            w: f32,
+            h: f32,
+            speed: f64,
+            cde: cc_math::CliffordDensityElement,
+            sprite: Option<image::RgbaImage>,
+            spawn_timer: usize,
+            explosion_timer: usize,
+        }
+
+        /// An emitted directional soliton or projectile propagating along a heading vector.
+        struct SolitonProjectile {
+            pos: [f32; 2],
+            vel: [f32; 2],
+            color: [u8; 3],
+        }
+
+        /// An attached trailing field excitation (wake, thruster trail, or dispersion)
+        /// emanating opposite to a holon's heading vector.
+        struct AttachedWake {
+            pos: [f32; 2],
+            vel: [f32; 2],
+            color: [u8; 3],
+            timer: usize,
+            max_timer: usize,
+            radius: f32,
+        }
+
+        /// A localized consumable field excitation (prop, token, or energy node).
+        struct FieldExcitation {
+            pos: [f32; 2],
+            vel: [f32; 2],
+            color: [u8; 3],
+            timer: usize,
+        }
+
+        /// A radial dispersion burst produced when a holon undergoes a state transition.
+        struct RadialDispersion {
+            pos: [f32; 2],
+            timer: usize,
+            max_timer: usize,
+            radius: f32,
+            color: [u8; 3],
+        }
+
+        let qfield = model.build_continuous_qfield(64);
+        let basis = cc_math::StateBasis::new(3);
+
+        let player_track = model.manifest.tracks.iter().find(|t| t.kind == "player");
+        let player_sprite: Option<image::RgbaImage> = player_track.and_then(|t| {
+            let si = t.sprite? as usize;
+            let bytes = model.sprites.get(si)?;
+            image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+                .ok()
+                .map(|img| img.to_rgba8())
+        });
+        let (pw, ph) = player_track
+            .map(|t| (t.size[0].max(16) as f32, t.size[1].max(20) as f32))
+            .unwrap_or((26.0, 36.0));
+
+        let mut holons: Vec<AutonomousHolon> = model
+            .manifest
+            .tracks
+            .iter()
+            .filter(|t| t.kind != "player" && t.sprite.is_some())
+            .enumerate()
+            .map(|(idx, t)| {
+                let sprite = t.sprite.and_then(|si| {
+                    let bytes = model.sprites.get(si as usize)?;
+                    image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+                        .ok()
+                        .map(|img| img.to_rgba8())
+                });
+                let theta0 = -std::f64::consts::FRAC_PI_2;
+                let cde = cc_math::CliffordDensityElement::new(1.0, theta0, 0, 3, t.color);
+                let w = t.size[0].max(16) as f32;
+                let h = t.size[1].max(16) as f32;
+                let sx = if t.spawn[0] > 0 && (t.spawn[0] as usize) < vw {
+                    t.spawn[0] as f32
+                } else {
+                    40.0 + ((idx * 67) % (vw.saturating_sub(80))).max(10) as f32
+                };
+                AutonomousHolon {
+                    x: sx,
+                    y: -50.0 - (idx as f32) * 45.0,
+                    w,
+                    h,
+                    speed: 1.2 + ((idx % 3) as f64) * 0.35,
+                    cde,
+                    sprite,
+                    spawn_timer: idx * 35,
+                    explosion_timer: 0,
+                }
+            })
+            .collect();
+
+        let mut projectiles: Vec<SolitonProjectile> = Vec::new();
+        let mut wakes: Vec<AttachedWake> = Vec::new();
+        let mut excitations: Vec<FieldExcitation> = Vec::new();
+        let mut dispersions: Vec<RadialDispersion> = Vec::new();
+        let mut enemies_downed = 0usize;
+        let mut tokens_absorbed = 0usize;
+        let mut score = 0u64;
+
+        let mut px = (vw as f32) * 0.5 - pw * 0.5;
+        let mut py = (vh as f32) - ph - 24.0;
+        let t0 = Instant::now();
+        let mut captured = 0usize;
+
+        for frame in 0..frames {
+            // Primary holon continuous maneuvering across open airspace
+            let t_sec = frame as f32 / 30.0;
+            let target_px = ((vw as f32) * 0.5 - pw * 0.5)
+                + ((vw as f32) * 0.35) * (t_sec * 0.8).sin()
+                + 18.0 * (t_sec * 2.1).sin();
+            let target_py = (vh as f32) - ph - 26.0 + 12.0 * (t_sec * 1.3).cos();
+            px += (target_px - px) * 0.12;
+            py += (target_py - py) * 0.12;
+            px = px.clamp(14.0, (vw as f32) - pw - 14.0);
+            py = py.clamp((vh as f32) * 0.35, (vh as f32) - ph - 8.0);
+
+            // Emit trailing process wake attached to the holon's trailing boundary
+            wakes.push(AttachedWake {
+                pos: [
+                    px + pw * 0.5 + ((frame as f32 * 1.7).sin() * pw * 0.22),
+                    py + ph + 1.0,
+                ],
+                vel: [0.0, 1.8],
+                color: [140, 220, 255],
+                timer: 8,
+                max_timer: 8,
+                radius: 3.2,
+            });
+
+            // Emit directed soliton projectiles along forward heading
+            if frame % 7 == 0 {
+                projectiles.push(SolitonProjectile {
+                    pos: [px + pw * 0.25, py - 2.0],
+                    vel: [0.0, -8.0],
+                    color: [180, 240, 255],
+                });
+                projectiles.push(SolitonProjectile {
+                    pos: [px + pw * 0.75, py - 2.0],
+                    vel: [0.0, -8.0],
+                    color: [180, 240, 255],
+                });
+            }
+
+            // Step attached process wakes
+            for w in &mut wakes {
+                w.pos[0] += w.vel[0];
+                w.pos[1] += w.vel[1];
+                w.timer = w.timer.saturating_sub(1);
+            }
+            wakes.retain(|w| w.timer > 0);
+
+            // Step directional solitons
+            for p in &mut projectiles {
+                p.pos[0] += p.vel[0];
+                p.pos[1] += p.vel[1];
+            }
+            projectiles.retain(|p| p.pos[1] > -10.0);
+
+            // Step consumable field excitations
+            for tok in &mut excitations {
+                tok.pos[0] += tok.vel[0];
+                tok.pos[1] += tok.vel[1];
+                tok.timer = tok.timer.saturating_sub(1);
+            }
+            excitations.retain(|tok| tok.timer > 0 && tok.pos[1] < vh as f32 + 10.0);
+
+            // Step radial dispersions
+            for d in &mut dispersions {
+                d.timer = d.timer.saturating_sub(1);
+            }
+            dispersions.retain(|d| d.timer > 0);
+
+            // Camera odometry from ego motor
+            let s_idx = frame.min(m.scroll.len().saturating_sub(1));
+            let off = m.scroll[s_idx];
+            let cam_x = (off[0] - m.origin[0]).clamp(0, aw.saturating_sub(vw) as i32) as usize;
+            let cam_y = (off[1] - m.origin[1]).clamp(0, ah.saturating_sub(vh) as i32) as usize;
+
+            // Step autonomous holons
+            for (hi, h) in holons.iter_mut().enumerate() {
+                if h.explosion_timer > 0 {
+                    h.explosion_timer -= 1;
+                    if h.explosion_timer == 0 {
+                        // Re-initialize holon state upon process cycle
+                        let _ = h.cde.transition_to(0, &basis);
+                        h.cde.amplitude = 1.0;
+                        h.y = -40.0 - ((hi * 41) % 120) as f32;
+                        h.x = 24.0 + ((hi * 79 + frame * 13) % (vw.saturating_sub(60))).max(10) as f32;
+                    }
+                    continue;
+                }
+                if frame < h.spawn_timer {
+                    continue;
+                }
+
+                // Bohm momentum step
+                let [vx, vy] = h.cde.bohm_momentum(h.speed);
+                h.x += vx as f32;
+                h.y += (vy as f32).max(1.25);
+
+                // Q_Cl quantum torque steering
+                let ux = (h.x / vw.max(1) as f32).clamp(0.0, 1.0) as f64;
+                let uy = (h.y / vh.max(1) as f32).clamp(0.0, 1.0) as f64;
+                let [gx, gy] = qfield.gradient_at(ux, uy);
+                h.cde.apply_quantum_torque([-gx * 0.001, -gy * 0.001], 0.15);
+
+                // Boundary reflection at lateral walls
+                if h.x <= 16.0 {
+                    h.x = 16.0;
+                    h.cde.reflect_at_boundary([1.0, 0.0], &basis);
+                } else if h.x + h.w >= (vw as f32) - 16.0 {
+                    h.x = (vw as f32) - 16.0 - h.w;
+                    h.cde.reflect_at_boundary([-1.0, 0.0], &basis);
+                }
+
+                // Recycle at top if past bottom of viewport
+                if h.y > vh as f32 + 20.0 {
+                    h.y = -35.0;
+                    h.x = 24.0 + ((hi * 71 + frame * 17) % (vw.saturating_sub(60))).max(10) as f32;
+                }
+
+                // Projectile incidence: T_{active -> collapsed}
+                let mut hit = false;
+                projectiles.retain(|p| {
+                    if hit {
+                        return true;
+                    }
+                    if p.pos[0] >= h.x - 2.0
+                        && p.pos[0] <= h.x + h.w + 2.0
+                        && p.pos[1] >= h.y
+                        && p.pos[1] <= h.y + h.h
+                    {
+                        hit = true;
+                        false // absorb projectile
+                    } else {
+                        true
+                    }
+                });
+
+                if hit {
+                    let _ = h.cde.transition_to(2, &basis);
+                    h.cde.amplitude = 0.0;
+                    h.explosion_timer = 18;
+                    enemies_downed += 1;
+                    score += 250;
+                    dispersions.push(RadialDispersion {
+                        pos: [h.x + h.w * 0.5, h.y + h.h * 0.5],
+                        timer: 16,
+                        max_timer: 16,
+                        radius: 18.0,
+                        color: [255, 180, 40],
+                    });
+                    excitations.push(FieldExcitation {
+                        pos: [h.x + h.w * 0.5, h.y + h.h * 0.5],
+                        vel: [0.0, 0.8],
+                        color: [252, 210, 40],
+                        timer: 180,
+                    });
+                }
+            }
+
+            // Primary holon contact with field excitations: absorption T_{excitation -> 0}
+            let pcx = px + pw * 0.5;
+            let pcy = py + ph * 0.5;
+            excitations.retain(|tok| {
+                let dx = pcx - tok.pos[0];
+                let dy = pcy - tok.pos[1];
+                if dx * dx + dy * dy <= 500.0 {
+                    tokens_absorbed += 1;
+                    score += 500;
+                    false // absorbed
+                } else {
+                    true
+                }
+            });
+
+            // Render world atlas
+            for y in 0..vh {
+                let sy = (cam_y + y).min(ah.saturating_sub(1));
+                for x in 0..vw {
+                    let sx = (cam_x + x).min(aw.saturating_sub(1));
+                    let i = (y * vw + x) * 3;
+                    let s = (sy * aw + sx) * 3;
+                    buf[i] = model.atlas.rgb[s];
+                    buf[i + 1] = model.atlas.rgb[s + 1];
+                    buf[i + 2] = model.atlas.rgb[s + 2];
+                }
+            }
+
+            // Render attached process wakes
+            for w in &wakes {
+                let wx = w.pos[0].round() as i32;
+                let wy = w.pos[1].round() as i32;
+                let rad = (w.radius * (w.timer as f32 / w.max_timer as f32)).max(1.0) as i32;
+                let alpha_scale = w.timer as f32 / w.max_timer as f32;
+                for dy in -rad..=rad {
+                    let py_pix = wy + dy;
+                    if py_pix < 0 || py_pix >= vh as i32 {
+                        continue;
+                    }
+                    for dx in -rad..=rad {
+                        let px_pix = wx + dx;
+                        if px_pix < 0 || px_pix >= vw as i32 {
+                            continue;
+                        }
+                        if dx * dx + dy * dy <= rad * rad {
+                            let idx = (py_pix as usize * vw + px_pix as usize) * 3;
+                            let c = w.color;
+                            buf[idx] = (buf[idx] as f32 * (1.0 - alpha_scale * 0.6)
+                                + c[0] as f32 * alpha_scale * 0.6) as u8;
+                            buf[idx + 1] = (buf[idx + 1] as f32 * (1.0 - alpha_scale * 0.6)
+                                + c[1] as f32 * alpha_scale * 0.6) as u8;
+                            buf[idx + 2] = (buf[idx + 2] as f32 * (1.0 - alpha_scale * 0.6)
+                                + c[2] as f32 * alpha_scale * 0.6) as u8;
+                        }
+                    }
+                }
+            }
+
+            // Render consumable field excitations
+            for tok in &excitations {
+                let tx = tok.pos[0].round() as i32;
+                let ty = tok.pos[1].round() as i32;
+                let rot = (frame * 6) % 360;
+                let r_rad = (rot as f32).to_radians();
+                let scale = 0.8 + 0.2 * (r_rad * 2.0).sin();
+                let rad = (5.0 * scale) as i32;
+                for dy in -rad..=rad {
+                    let py_pix = ty + dy;
+                    if py_pix < 0 || py_pix >= vh as i32 {
+                        continue;
+                    }
+                    for dx in -rad..=rad {
+                        let px_pix = tx + dx;
+                        if px_pix < 0 || px_pix >= vw as i32 {
+                            continue;
+                        }
+                        let dist = dx.abs() + dy.abs();
+                        if dist <= rad + 1 {
+                            let idx = (py_pix as usize * vw + px_pix as usize) * 3;
+                            let rgb = if dist <= 1 {
+                                [255u8, 255, 230]
+                            } else {
+                                tok.color
+                            };
+                            buf[idx] = rgb[0];
+                            buf[idx + 1] = rgb[1];
+                            buf[idx + 2] = rgb[2];
+                        }
+                    }
+                }
+            }
+
+            // Render autonomous holons
+            for h in &holons {
+                if h.explosion_timer > 0 || frame < h.spawn_timer {
+                    continue;
+                }
+                let ax = h.x.round() as i32;
+                let ay = h.y.round() as i32;
+                if let Some(sprite) = &h.sprite {
+                    let sw = sprite.width() as i32;
+                    let sh = sprite.height() as i32;
+                    for sy in 0..sh {
+                        let dy = ay + sy;
+                        if dy < 0 || dy >= vh as i32 {
+                            continue;
+                        }
+                        for sx in 0..sw {
+                            let dx = ax + sx;
+                            if dx < 0 || dx >= vw as i32 {
+                                continue;
+                            }
+                            let p = sprite.get_pixel(sx as u32, sy as u32);
+                            let alpha = p[3] as u32;
+                            if alpha >= 90 {
+                                let i = (dy as usize * vw + dx as usize) * 3;
+                                let inv = 255 - alpha;
+                                buf[i] = ((p[0] as u32 * alpha + buf[i] as u32 * inv) / 255) as u8;
+                                buf[i + 1] =
+                                    ((p[1] as u32 * alpha + buf[i + 1] as u32 * inv) / 255) as u8;
+                                buf[i + 2] =
+                                    ((p[2] as u32 * alpha + buf[i + 2] as u32 * inv) / 255) as u8;
+                            }
+                        }
+                    }
+                } else {
+                    for y in ay.max(0)..(ay + h.h as i32).min(vh as i32) {
+                        for x in ax.max(0)..(ax + h.w as i32).min(vw as i32) {
+                            let i = (y as usize * vw + x as usize) * 3;
+                            buf[i] = 180;
+                            buf[i + 1] = 60;
+                            buf[i + 2] = 60;
+                        }
+                    }
+                }
+            }
+
+            // Render radial dispersions (state transition energy release)
+            for d in &dispersions {
+                let bx = d.pos[0].round() as i32;
+                let by = d.pos[1].round() as i32;
+                let progress = 1.0 - (d.timer as f32 / d.max_timer as f32);
+                let radius = (6.0 + progress * d.radius) as i32;
+                for dy in -radius..=radius {
+                    let py_pix = by + dy;
+                    if py_pix < 0 || py_pix >= vh as i32 {
+                        continue;
+                    }
+                    for dx in -radius..=radius {
+                        let px_pix = bx + dx;
+                        if px_pix < 0 || px_pix >= vw as i32 {
+                            continue;
+                        }
+                        let d2 = dx * dx + dy * dy;
+                        let r2 = radius * radius;
+                        if d2 <= r2 {
+                            let idx = (py_pix as usize * vw + px_pix as usize) * 3;
+                            let frac = (d2 as f32 / r2 as f32).sqrt();
+                            let rgb = if frac < 0.35 {
+                                [255u8, 255, 240]
+                            } else if frac < 0.7 {
+                                d.color
+                            } else {
+                                [220u8, 60, 20]
+                            };
+                            buf[idx] = ((buf[idx] as u32 + rgb[0] as u32) / 2) as u8;
+                            buf[idx + 1] = ((buf[idx + 1] as u32 + rgb[1] as u32) / 2) as u8;
+                            buf[idx + 2] = ((buf[idx + 2] as u32 + rgb[2] as u32) / 2) as u8;
+                        }
+                    }
+                }
+            }
+
+            // Render directional solitons
+            for p in &projectiles {
+                let bx = p.pos[0].round() as i32;
+                let by = p.pos[1].round() as i32;
+                for dy in -4i32..=4 {
+                    let py_pix = by + dy;
+                    if py_pix < 0 || py_pix >= vh as i32 {
+                        continue;
+                    }
+                    for dx in -1i32..=1 {
+                        let px_pix = bx + dx;
+                        if px_pix < 0 || px_pix >= vw as i32 {
+                            continue;
+                        }
+                        let idx = (py_pix as usize * vw + px_pix as usize) * 3;
+                        let rgb = if dx == 0 && dy.abs() <= 2 {
+                            [255u8, 255, 255]
+                        } else {
+                            p.color
+                        };
+                        buf[idx] = rgb[0];
+                        buf[idx + 1] = rgb[1];
+                        buf[idx + 2] = rgb[2];
+                    }
+                }
+            }
+
+            // Render primary holon
+            let pl_x = px.round() as i32;
+            let pl_y = py.round() as i32;
+            if let Some(sprite) = &player_sprite {
+                let sw = sprite.width() as i32;
+                let sh = sprite.height() as i32;
+                for sy in 0..sh {
+                    let dy = pl_y + sy;
+                    if dy < 0 || dy >= vh as i32 {
+                        continue;
+                    }
+                    for sx in 0..sw {
+                        let dx = pl_x + sx;
+                        if dx < 0 || dx >= vw as i32 {
+                            continue;
+                        }
+                        let p = sprite.get_pixel(sx as u32, sy as u32);
+                        let alpha = p[3] as u32;
+                        if alpha >= 90 {
+                            let i = (dy as usize * vw + dx as usize) * 3;
+                            let inv = 255 - alpha;
+                            buf[i] = ((p[0] as u32 * alpha + buf[i] as u32 * inv) / 255) as u8;
+                            buf[i + 1] =
+                                ((p[1] as u32 * alpha + buf[i + 1] as u32 * inv) / 255) as u8;
+                            buf[i + 2] =
+                                ((p[2] as u32 * alpha + buf[i + 2] as u32 * inv) / 255) as u8;
+                        }
+                    }
+                }
+            } else {
+                for y in pl_y.max(0)..(pl_y + ph as i32).min(vh as i32) {
+                    for x in pl_x.max(0)..(pl_x + pw as i32).min(vw as i32) {
+                        let i = (y as usize * vw + x as usize) * 3;
+                        buf[i] = 70;
+                        buf[i + 1] = 180;
+                        buf[i + 2] = 240;
+                    }
+                }
+            }
+
+            // Render HUD overlay (top status / side status)
+            if let Some(hud) = &model.hud {
+                let hud_top = m.hud_top as usize;
+                if hud_top < vh && hud.height > 0 {
+                    for y in 0..hud.height.min(vh.saturating_sub(hud_top)) {
+                        let dy = hud_top + y;
+                        for x in 0..hud.width.min(vw) {
+                            let s = (y * hud.width + x) * 3;
+                            let i = (dy * vw + x) * 3;
+                            buf[i] = hud.rgb[s];
+                            buf[i + 1] = hud.rgb[s + 1];
+                            buf[i + 2] = hud.rgb[s + 2];
+                        }
+                    }
+                }
+            }
+
+            if let Some(w) = writer.as_mut() {
+                w.write_frame(&buf)?;
+            }
+            if let Some(dir) = &capture {
+                if frame % 10 == 0 || frame + 1 == frames {
+                    let p = dir.join(format!("frame_{frame:05}.png"));
+                    video_io::write_png(&p, vw as u32, vh as u32, &buf)?;
+                    captured += 1;
+                }
+            }
+        }
+
+        let secs = t0.elapsed().as_secs_f64();
+        if let Some(w) = writer.as_mut() {
+            w.finish()?;
+        }
+        println!(
+            "unfolded {frames} frames in {:.3}s ({:.0} Hz, planar Q_Cl flight corridor)",
+            secs,
+            frames as f64 / secs.max(1e-9)
+        );
+        println!(
+            "player ended at x={:.1} y={:.1} (world), enemies_downed={enemies_downed}, bonus_collected={tokens_absorbed}, score={score}",
+            px, py
+        );
         if let Some(dir) = &capture {
             println!("captured {captured} frames -> {}", dir.display());
         }
@@ -996,7 +1614,8 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
             let sh = sprite.height() as i32;
             let sy_off = (py + player.h as i32) - sh;
             let sx_off = px + (player.w as i32 - sw) / 2;
-            let run_flip = player.on_ground && (frame / 6) % 2 == 1;
+            let is_jumping = !player.on_ground;
+            let walk_cycle = (frame / 4) % 3;
             for sy in 0..sh {
                 let dy = sy_off + sy;
                 if dy < 0 || dy >= vh as i32 {
@@ -1007,8 +1626,24 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                     if dx < 0 || dx >= vw as i32 {
                         continue;
                     }
-                    let src_x = if run_flip { sw - 1 - sx } else { sx };
-                    let p = sprite.get_pixel(src_x as u32, sy as u32);
+                    // Harmonic vitality stride / jump pose
+                    let mut src_x = sx;
+                    let mut src_y = sy;
+                    if is_jumping {
+                        if sy < sh / 2 && sy > 1 {
+                            src_y = (sy + 1).min(sh - 1);
+                        }
+                    } else if player.on_ground {
+                        let is_leg = sy >= (sh * 3) / 4;
+                        if is_leg {
+                            if walk_cycle == 1 {
+                                src_x = (sx + 1).min(sw - 1);
+                            } else if walk_cycle == 2 {
+                                src_x = (sx - 1).max(0);
+                            }
+                        }
+                    }
+                    let p = sprite.get_pixel(src_x as u32, src_y as u32);
                     let a = p[3] as u32;
                     if a >= 100 {
                         let i = (dy as usize * vw + dx as usize) * 3;

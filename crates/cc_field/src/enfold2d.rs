@@ -23,7 +23,7 @@ pub const TILE: usize = 16;
 pub const TILE_ORIGIN_Y: i32 = 1;
 /// Sprite-scale prior: actors are at most two tiles across. Larger residual
 /// components are parallax layers, decorations or seams, not tracked actors.
-pub const ACTOR_MAX_PX: i32 = 40;
+pub const ACTOR_MAX_PX: i32 = 48;
 /// Minimum residual area for an actor candidate (about half a tile).
 pub const ACTOR_MIN_AREA: i32 = 120;
 
@@ -1351,7 +1351,7 @@ fn classify_tracks(tracks: &mut [ActorTrack]) {
     let mut best: Option<(usize, usize)> = None;
     for (i, t) in tracks.iter().enumerate() {
         let (w, h) = t.median_size();
-        if !(8..=30).contains(&w) || !(10..=36).contains(&h) {
+        if !(8..=44).contains(&w) || !(10..=44).contains(&h) {
             continue;
         }
         let count = t.boxes.len();
@@ -2217,12 +2217,27 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         .unwrap_or(false);
 
     // Pass 0: HUD partitioning.
+    let rules = crate::rules2d::Rules2D::try_find_for_video(path);
     let (hud_bottom, hud_top) = if is_static {
         let (hb, ht) = detect_static_borders(path, start, info.width as usize, info.height as usize)?;
-        (hb, opts.hud_top.unwrap_or(ht))
+        (
+            rules.as_ref().and_then(|r| r.hud_bottom).unwrap_or(hb),
+            opts.hud_top
+                .or_else(|| rules.as_ref().and_then(|r| r.hud_top))
+                .unwrap_or(ht)
+                .min(info.height as usize),
+        )
+    } else if rules.as_ref().map_or(false, |r| r.is_vertical()) {
+        let ht = opts
+            .hud_top
+            .or_else(|| rules.as_ref().and_then(|r| r.hud_top))
+            .unwrap_or(info.height as usize)
+            .min(info.height as usize);
+        let hb = rules.as_ref().and_then(|r| r.hud_bottom).unwrap_or(0);
+        (hb, ht)
     } else {
         let ht = match opts.hud_top {
-            Some(t) => t,
+            Some(t) => t.min(info.height as usize),
             None => {
                 let mut reader = video_io::FrameReader::open_range(
                     path,
@@ -2415,18 +2430,21 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
                     let i = (fy as usize * fw + fx as usize) * 3;
                     let c = [frame.rgb[i], frame.rgb[i + 1], frame.rgb[i + 2]];
                     let si = sy * sa.w + sx;
-                    sa.buckets[si].add(c);
                     // Alpha: differs from the plain atlas → actor pixel.
                     let wx = fx + off[0];
                     let wy = fy + off[1];
-                    if let Some(a) = plain_atlas.pixel(wx, wy) {
+                    let is_fg = if let Some(a) = plain_atlas.pixel(wx, wy) {
                         let d = (c[0] as i32 - a[0] as i32)
                             .abs()
                             .max((c[1] as i32 - a[1] as i32).abs())
                             .max((c[2] as i32 - a[2] as i32).abs());
-                        if d > 42 {
-                            sa.alpha[si] += 1;
-                        }
+                        d > 35
+                    } else {
+                        false
+                    };
+                    if is_fg {
+                        sa.buckets[si].add(c);
+                        sa.alpha[si] += 1;
                     }
                 }
             }
@@ -2444,13 +2462,16 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
             continue;
         }
         let mut rgba = vec![0u8; sa.w * sa.h * 4];
+        let min_hits = (sa.total / 8).max(1);
         for i in 0..sa.w * sa.h {
-            let (c, _) = sa.buckets[i].mode().unwrap_or(([0, 0, 0], 0));
-            let a = (sa.alpha[i] * 255 / sa.total.max(1)).min(255) as u8;
-            rgba[i * 4] = c[0];
-            rgba[i * 4 + 1] = c[1];
-            rgba[i * 4 + 2] = c[2];
-            rgba[i * 4 + 3] = a;
+            if let Some((c, _)) = sa.buckets[i].mode() {
+                if sa.alpha[i] >= min_hits {
+                    rgba[i * 4] = c[0];
+                    rgba[i * 4 + 1] = c[1];
+                    rgba[i * 4 + 2] = c[2];
+                    rgba[i * 4 + 3] = 255;
+                }
+            }
         }
         t.sprite = Some(Sprite2D {
             width: sa.w,
