@@ -10,7 +10,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use cc_field::enfold2d::{self, EnfoldOptions, TILE};
+use cc_field::enfold2d::{self, EnfoldOptions};
 use cc_field::model2d::Model2D;
 use cc_field::video_io;
 
@@ -257,40 +257,23 @@ impl Player {
         }
     }
 
-    fn tile_range(&self, m: &Model2D) -> (i32, i32, i32, i32) {
-        let tx0 = (self.x / TILE as f32).floor() as i32;
-        let tx1 = ((self.x + PW - 1.0) / TILE as f32).floor() as i32;
-        let oy = m.manifest.origin_y;
-        let ty0 = ((self.y - oy as f32) / TILE as f32).floor() as i32;
-        let ty1 = ((self.y + PH - 1.0 - oy as f32) / TILE as f32).floor() as i32;
-        (tx0, ty0, tx1, ty1)
-    }
-
-    fn solid(&self, m: &Model2D, tx: i32, ty: i32) -> bool {
-        tx >= 0 && ty >= 0 && m.kind(tx as usize, ty as usize) == cc_field::TileKind::Solid
-    }
-
-    fn one_way(&self, m: &Model2D, tx: i32, ty: i32) -> bool {
-        tx >= 0 && ty >= 0 && m.kind(tx as usize, ty as usize) == cc_field::TileKind::OneWay
-    }
-
-    fn step(&mut self, m: &Model2D, dir: f32, jump: bool) -> Option<(usize, usize)> {
-        let oy = m.manifest.origin_y as f32;
-        let tile = TILE as f32;
-
-        // Horizontal: only the leading edge can collide.
+    fn step(
+        &mut self,
+        m: &Model2D,
+        block_props: &[BlockProp],
+        dir: f32,
+        jump: bool,
+    ) -> Option<usize> {
+        // Horizontal: continuous world-space check along the leading edge.
         self.x += dir * RUN;
         if dir != 0.0 {
             let lead = if dir > 0.0 { self.x + PW - 1.0 } else { self.x };
-            let tx = (lead / tile).floor() as i32;
-            let ty0 = ((self.y - oy) / tile).floor() as i32;
-            let ty1 = ((self.y + PH - 1.0 - oy) / tile).floor() as i32;
-            for ty in ty0..=ty1 {
-                if self.solid(m, tx, ty) {
+            for sample_y in [self.y + 1.0, self.y + PH * 0.5, self.y + PH - 1.0] {
+                if let Some(r) = m.solid_at_world(lead, sample_y) {
                     self.x = if dir > 0.0 {
-                        tx as f32 * tile - PW
+                        r[0] as f32 - PW
                     } else {
-                        (tx as f32 + 1.0) * tile
+                        (r[2] + 1) as f32
                     };
                     break;
                 }
@@ -307,52 +290,54 @@ impl Player {
         let prev_feet = self.y + PH;
         self.y += self.vy;
         self.on_ground = false;
-        let tx0 = (self.x / tile).floor() as i32;
-        let tx1 = ((self.x + PW - 1.0) / tile).floor() as i32;
 
         if self.vy >= 0.0 {
             let feet = self.y + PH;
-            let ty = ((feet - oy) / tile).floor() as i32;
-            let top = oy + ty as f32 * tile;
-            let mut landed = false;
-            for tx in tx0..=tx1 {
-                let solid = self.solid(m, tx, ty);
-                let one = self.one_way(m, tx, ty);
-                if !solid && !one {
-                    continue;
-                }
-                let tol = if solid { tile } else { 2.0 };
-                if feet > top && prev_feet <= top + tol {
-                    landed = true;
-                    break;
+            let mut landed_top: Option<f32> = None;
+            for sample_x in [self.x, self.x + PW * 0.5, self.x + PW - 1.0] {
+                if let Some(r) = m.solid_at_world(sample_x, feet) {
+                    let top = r[1] as f32;
+                    let h = (r[3] - r[1] + 1).max(4) as f32;
+                    if feet > top && prev_feet <= top + h {
+                        landed_top = Some(landed_top.map_or(top, |t| t.min(top)));
+                    }
+                } else if let Some(r) = m.one_way_at_world(sample_x, feet) {
+                    let top = r[1] as f32;
+                    if feet > top && prev_feet <= top + 2.0 {
+                        landed_top = Some(landed_top.map_or(top, |t| t.min(top)));
+                    }
                 }
             }
-            if landed {
+            if let Some(top) = landed_top {
                 self.y = top - PH;
                 self.vy = 0.0;
                 self.on_ground = true;
             }
             None
         } else {
-            let ty = ((self.y - oy) / tile).floor() as i32;
-            let mut hit = None;
-            for tx in tx0..=tx1 {
-                let is_solid = self.solid(m, tx, ty);
-                let is_block = self.one_way(m, tx, ty)
-                    && (ty + 1 < m.manifest.rows as i32
-                        && m.kind(tx as usize, (ty + 1) as usize) == cc_field::TileKind::Empty);
-                if is_solid || is_block {
-                    hit = Some((tx as usize, ty as usize));
+            let head_y = self.y;
+            let mut hit_prop: Option<usize> = None;
+            let mut hit_bottom: Option<f32> = None;
+            for sample_x in [self.x, self.x + PW * 0.5, self.x + PW - 1.0] {
+                if let Some(r) = m.solid_at_world(sample_x, head_y) {
+                    hit_bottom = Some((r[3] + 1) as f32);
+                    break;
+                }
+                let sx = sample_x.floor() as i32;
+                let sy = head_y.floor() as i32;
+                if let Some((pi, p)) = block_props.iter().enumerate().find(|(_, p)| {
+                    sx >= p.rect[0] && sx <= p.rect[2] && sy >= p.rect[1] && sy <= p.rect[3]
+                }) {
+                    hit_prop = Some(pi);
+                    hit_bottom = Some((p.rect[3] + 1) as f32);
                     break;
                 }
             }
-            if let Some((hx, hy)) = hit {
-                self.y = oy + (hy as f32 + 1.0) * tile;
+            if let Some(bot) = hit_bottom {
+                self.y = bot;
                 self.vy = 0.0;
-                Some((hx, hy))
-            } else {
-                None
             }
+            hit_prop
         }
     }
 }
@@ -384,13 +369,13 @@ struct CoinToken {
     timer: usize,
 }
 
-/// An interactive prop block (Bohmian process holon with discrete state transitions).
-/// - State 0: Active Question Block (emits token on upward impact)
-/// - State 1: Bumping impulse phase
-/// - State 2: Spent Empty Block (unreactive)
+/// An interactive prop block (Bohmian process holon with discrete state transitions)
+/// represented by its continuous world-space bounding rect `rect = [x0, y0, x1, y1]`:
+/// - State 0: Active interactive prop (emits token on upward impact)
+/// - State 1: Harmonic bumping impulse phase
+/// - State 2: Spent / collapsed block (unreactive)
 struct BlockProp {
-    tx: usize,
-    ty: usize,
+    rect: [i32; 4],
     bump_timer: usize,
     state: u32,
 }
@@ -705,26 +690,22 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
         })
         .collect();
 
-    // Interactive block props (floating blocks with open space underneath).
-    let mut block_props: std::collections::HashMap<(usize, usize), BlockProp> =
-        std::collections::HashMap::new();
-    let rows = (ah / TILE).min(m.ground_top as usize / TILE);
-    for ty in 0..rows {
-        for tx in 0..(aw / TILE) {
-            // A bumpable block is a floating platform with empty space underneath it
-            if model.kind(tx, ty) == cc_field::TileKind::OneWay
-                && ty + 1 < rows
-                && model.kind(tx, ty + 1) == cc_field::TileKind::Empty
-            {
-                block_props.insert(
-                    (tx, ty),
-                    BlockProp {
-                        tx,
-                        ty,
-                        bump_timer: 0,
-                        state: 0,
-                    },
-                );
+    // Interactive block props: discovered directly from continuous `m.platforms`
+    // segments that have open backdrop space underneath (`is_open_below_rect`),
+    // subdivided into square interactive units of side `h = r[3] - r[1] + 1`.
+    let mut block_props: Vec<BlockProp> = Vec::new();
+    for &r in &m.platforms {
+        if r[3] < m.ground_top && model.is_open_below_rect(r) {
+            let side = (r[3] - r[1] + 1).max(8);
+            let mut sx = r[0];
+            while sx <= r[2] {
+                let ex = (sx + side - 1).min(r[2]);
+                block_props.push(BlockProp {
+                    rect: [sx, r[1], ex, r[3]],
+                    bump_timer: 0,
+                    state: 0,
+                });
+                sx += side;
             }
         }
     }
@@ -735,38 +716,43 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
     let mut captured = 0usize;
     for frame in 0..frames {
         let prev_feet = player.y + PH;
-        // Scripted input: run right, jump when a wall, platform, gap, or actor is ahead.
+        // Continuous world-space probes ahead and above the player holon.
         let ahead = player.x + PW + 12.0;
-        let foot_ty = ((player.y + PH + 2.0 - m.origin_y as f32) / TILE as f32).floor() as i32;
-        let tx = (ahead / TILE as f32).floor() as i32;
-        let wall = player.solid(&model, tx, foot_ty - 1);
-        // A one-way surface can sit a few tiles above the feet (pipe tops, ledges);
-        // skip unbumped floating blocks with empty space underneath so the player runs
-        // under them and triggers `under_coin_box` from below.
+        let foot_y = player.y + PH + 2.0;
+        let body_y = player.y + PH * 0.5;
+        let wall = model.solid_at_world(ahead, body_y).is_some();
         let platform = (1..=4).any(|k| {
-            player.one_way(&model, tx, foot_ty - k)
-                && !block_props
-                    .get(&(tx.max(0) as usize, (foot_ty - k).max(0) as usize))
-                    .map_or(false, |p| p.state == 0 && coins_collected == 0)
+            let probe_y = foot_y - k as f32 * 16.0;
+            model.one_way_at_world(ahead, probe_y).is_some()
+                && !block_props.iter().any(|p| {
+                    p.state == 0
+                        && coins_collected == 0
+                        && ahead.floor() as i32 >= p.rect[0]
+                        && ahead.floor() as i32 <= p.rect[2]
+                        && probe_y.floor() as i32 >= p.rect[1]
+                        && probe_y.floor() as i32 <= p.rect[3]
+                })
         });
-        let gap = !player.solid(&model, tx, foot_ty) && !player.one_way(&model, tx, foot_ty);
-        let center_tx = ((player.x + PW / 2.0) / TILE as f32).floor() as usize;
+        let gap = model.solid_at_world(ahead, foot_y).is_none()
+            && model.one_way_at_world(ahead, foot_y).is_none();
+        let center_x = (player.x + PW * 0.5).floor() as i32;
+        let foot_yi = foot_y.floor() as i32;
         let under_coin_box = player.on_ground
             && coins_collected == 0
-            && (1..=4).any(|k| {
-                foot_ty - k >= 0
-                    && block_props
-                        .get(&(center_tx, (foot_ty - k) as usize))
-                        .map_or(false, |p| p.state == 0)
+            && block_props.iter().any(|p| {
+                p.state == 0
+                    && center_x >= p.rect[0]
+                    && center_x <= p.rect[2]
+                    && p.rect[3] < foot_yi
+                    && (foot_yi - p.rect[1]) <= 68
             });
         let approaching_coin_box = coins_collected == 0
-            && (1..=3).any(|dx| {
-                (1..=4).any(|k| {
-                    foot_ty - k >= 0
-                        && block_props
-                            .get(&(center_tx + dx, (foot_ty - k) as usize))
-                            .map_or(false, |p| p.state == 0)
-                })
+            && block_props.iter().any(|p| {
+                p.state == 0
+                    && p.rect[0] > center_x
+                    && (p.rect[0] - center_x) <= 48
+                    && p.rect[3] < foot_yi
+                    && (foot_yi - p.rect[1]) <= 68
             });
         // An actor is ahead on the path -> jump at parabolic distance to land on it.
         let actor_ahead = !approaching_coin_box
@@ -778,16 +764,16 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
             });
         let jump = player.on_ground
             && (wall || platform || actor_ahead || under_coin_box || (gap && frame % 3 == 0));
-        let hit = player.step(&model, 1.0, jump);
-        if let Some((hx, hy)) = hit {
-            if let Some(prop) = block_props.get_mut(&(hx, hy)) {
+        let hit = player.step(&model, &block_props, 1.0, jump);
+        if let Some(pi) = hit {
+            if let Some(prop) = block_props.get_mut(pi) {
                 if prop.state == 0 {
                     prop.state = 1;
                     prop.bump_timer = 8;
                     coins_collected += 1;
                     coins.push(CoinToken {
-                        x: hx as f32 * TILE as f32 + 4.0,
-                        y: m.origin_y as f32 + hy as f32 * TILE as f32 - 4.0,
+                        x: prop.rect[0] as f32 + 4.0,
+                        y: prop.rect[1] as f32 - 4.0,
                         vy: -3.5,
                         timer: 16,
                     });
@@ -795,7 +781,7 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
             }
         }
 
-        for prop in block_props.values_mut() {
+        for prop in &mut block_props {
             if prop.bump_timer > 0 {
                 prop.bump_timer -= 1;
                 if prop.bump_timer == 0 {
@@ -868,8 +854,10 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
             }
         }
         if std::env::var_os("CC_TRACE").is_some() && frame % 25 == 0 {
-            let (a, b, c, d) = player.tile_range(&model);
-            eprintln!("trace f{frame}: x={:.2} y={:.2} vy={:.2} ground={} tiles=({a},{b})..({c},{d}) solid={}", player.x, player.y, player.vy, player.on_ground, player.solid(&model, (player.x/16.0) as i32, d));
+            eprintln!(
+                "trace f{frame}: x={:.2} y={:.2} vy={:.2} ground={}",
+                player.x, player.y, player.vy, player.on_ground
+            );
         }
 
         // Camera follows the player, clamped to the atlas.
@@ -909,13 +897,13 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
             }
         }
 
-        // Render bumping interactive block displacement.
-        for prop in block_props.values() {
+        // Render bumping interactive block displacement in continuous world coordinates.
+        for prop in &block_props {
             if prop.bump_timer > 0 {
-                let bx = (prop.tx * TILE) as i32 - cam_x as i32;
-                let by = (m.origin_y + prop.ty as i32 * TILE as i32) - cam_y as i32;
-                let bw = TILE as i32;
-                let bh = TILE as i32;
+                let bx = prop.rect[0] - cam_x as i32;
+                let by = prop.rect[1] - cam_y as i32;
+                let bw = (prop.rect[2] - prop.rect[0] + 1).max(1);
+                let bh = (prop.rect[3] - prop.rect[1] + 1).max(1);
                 if bx + bw <= 0 || bx >= vw as i32 || by + bh <= 0 || by >= vh as i32 {
                     continue;
                 }
@@ -938,14 +926,14 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                         }
                     }
                 }
-                // Draw tile from model.atlas displaced upward by bump_dy
+                // Draw region from model.atlas displaced upward by bump_dy
                 for ty in 0..bh {
                     let dy = by + bump_dy + ty;
-                    let ay = prop.ty * TILE + ty as usize;
+                    let ay = (prop.rect[1] + ty).max(0) as usize;
                     if dy >= 0 && dy < vh as i32 && ay < ah {
                         for tx in 0..bw {
                             let dx = bx + tx;
-                            let ax = prop.tx * TILE + tx as usize;
+                            let ax = (prop.rect[0] + tx).max(0) as usize;
                             if dx >= 0 && dx < vw as i32 && ax < aw {
                                 let idx = (dy as usize * vw + dx as usize) * 3;
                                 let s = (ay * aw + ax) * 3;
