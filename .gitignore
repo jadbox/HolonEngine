@@ -1,0 +1,19 @@
+# Rust
+/target
+**/*.rs.bk
+*.pdb
+Cargo.lock.bak
+
+# Media
+*.pdf
+*.mp4
+*.mpg
+*.mpeg
+
+# Generated assets
+*.ppm
+*.png
+*.cc
+
+# Scratch
+old_files_ignore/
