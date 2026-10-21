@@ -3,7 +3,7 @@
 
 **Note: This is a WIP (pre-alpha) experimental proof-of-concept world compiler and runtime grounded in Projective Geometric Algebra ($\mathbb{G}_{3,0,1}$), Spinor Algebra ($\mathbb{G}_{2,0}$), and Basil Hiley's Clifford Implicate Order.**
 
-**HolonEngine** compiles raw gameplay video streams into deterministic, self-contained **Implicate World Models (`.cc`)** that execute forward at thousands of hertz with zero neural inference at runtime.
+**HolonEngine** compiles raw gameplay video streams into deterministic, self-contained Implicate World Models that executes with zero neural inference at runtime.
 
 Conventional game engines hardcode per-game state machines (`if is_pacman { eat_dot() } else if is_mario { stomp_goomba() }`), while autoregressive video world models hallucinate pixels frame-by-frame without persistent geometry or conservation laws. **HolonEngine** replaces both with an algebraic process ontology: **`cc enfold`** extracts camera odometry, actor-free panoramas, oriented geometric boundaries, and canonical spinor processes from raw video; **`cc unfold`** evolves the compiled `.cc` world forward via Bohmian momentum, state idempotents, and the Clifford Quantum Potential ($\mathcal{Q}_{\text{Cl}}$).
 
