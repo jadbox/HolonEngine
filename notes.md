@@ -35,11 +35,29 @@
 - Player collision: leading-edge-only horizontal resolution, move-then-resolve vertically, one-way only when falling with `prev_feet <= top + 2`, solid landing tolerance one tile. Resolving *all* overlapped tiles per axis teleports the player through the floor; the leading-edge rule does not.
 - `cc unfold` is headless at 3–16 kHz (release); rendering = atlas blit + static HUD composite + player marker.
 
-## Actor tracking (residual mask)
-- Residuals compare each frame to the atlas at its scroll offset. Off-by-one registration turns every sprite edge into a full-screen residual: refine the FFT offset with an exhaustive ±1 SSAD search (normalised by covered area) before masking. Cheap (9 × sparse frame) and removes most seams.
-- SMB3's cloud layer is **parallax**: registered by ground scroll it drifts forever, so clouds produce persistent cloud-sized residuals at *world* positions that keep moving. Reject components above `2 * TILE` on either axis (sprite-scale prior, `ACTOR_MAX_PX`); the gate is game-agnostic.
-- Even after that, the player's *pose changes* split him into several tracks (walk/jump frames) instead of one. The camera anchor is the reliable cue: the player is the tracked object nearest the viewport centre. Track classification (`Player`/`Goomba`/`Koopa`) is still cosmetic and noisy.
-- `?` blocks / bumps and stomps need a richer tile model than "solid below the surface, one-way above"; currently the pipe body is Background and only its 1-tile top is one-way, so Mario walks through the pipe instead of around it. That is a deliberate limitation (decorations vs grounded obstacles are indistinguishable without rules) and belongs in a per-game rules file.
+## Actor tracking and Hiley process ontology
+- Residuals compare each frame to the atlas at its scroll offset. Off-by-one registration turns every sprite edge into a full-screen residual: refine the FFT offset with an exhaustive ±1 SSAD search (normalised by covered area) before masking.
+- `ACTOR_MAX_PX = 40` (up from 32): captures tall 2-tile sprites (Piranha plant 18x34, Super Mario, Koopas) while rejecting clouds (w>=32 with irregular tops).
+- Player classification: in any side-scroller, the player is the dominant persistent actor alive across the segment (`t.boxes.len()`), while enemies exist only locally around spawn points. Track 0 is classified as `Player` (499 frames alive).
+- Autonomous entities as **Algebraic Holons** (Basil Hiley):
+  Entities are not boolean bags of properties, but processes inhabiting minimal left ideals $\mathcal{I}_i = \mathcal{C}\ell \epsilon_i$ governed by state idempotents ($\epsilon_s^2 = \epsilon_s$):
+  - State 0: Patrol negative direction ($\epsilon_0$)
+  - State 1: Patrol positive direction ($\epsilon_1$)
+  - State 2: Post-impact / passive state ($\epsilon_2$)
+  - Lateral boundary incidence (wall hit) triggers idempotent reversal transition $T_{0 \leftrightarrow 1}$.
+  - Top-down relational incidence (downward player motion onto actor's top boundary) collapses the actor to State 2 (stomp / squash) and imparts an upward restitution impulse to the player.
+  - Generically applies to any 2D game without ad-hoc per-game branching.
+
+## Grounded obstacles and multi-level platforms
+- Obstacles standing on the floor (pipes, pastel blocks, pyramids) often have multiple stepped flat tops within a single connected component.
+- Grounded obstacles (`height >= 2 * TILE`, bottom touches ground line) are segmented into horizontal flat shelves of width $\ge 12$ px.
+- This promotes pipe tops, pink screw-box tops, blue screw-box tops, and terrace blocks to one-way collision surfaces while leaving curved green hills as non-collidable background, without hardcoded game palettes.
+
+## Static 2D arenas and mazes (Pac-Man)
+- Detect camera regime via FFT phase correlation across playfield rows over a 3-4 second window: cumulative drift $\le 4$ px classifies the game as `Ortho2D-Static`.
+- In a static regime, cumulative scroll is identically $[0, 0]$; the temporal mode over the stream builds a clean actor-free panorama of the entire arena.
+- Enclosing maze walls are discovered directly by locating rows with horizontal wall runs spanning $\ge 60\%$ of columns, neatly isolating the playfield from top and bottom HUD text without hardcoded row numbers.
+- In top-down maze games, ground lines do not exist: tiles containing wall pixels are classified as `TileKind::Solid` (4-sided obstacles), corridor cells as `TileKind::Empty`, and outer text strips as `TileKind::Background`.
 
 ## Architecture decisions
 - `cc_field` owns video IO, 2D enfold, atlas, tiles, actor tracks, sprite CFT, and the `.cc` (CC2D) model format.

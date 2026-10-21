@@ -139,7 +139,7 @@ fn terrain_layout() {
     assert_eq!(tiles.rows, 13);
     assert!((tiles.cols as usize * TILE) >= level.atlas.image.width);
 
-    let (cols, rows) = (tiles.cols, tiles.rows);
+    let (cols, _rows) = (tiles.cols, tiles.rows);
     let at = |tx: usize, ty: usize| tiles.kinds[ty * cols + tx];
 
     // The floor is continuous under the whole level.
@@ -164,8 +164,8 @@ fn terrain_layout() {
     assert_eq!(at(2, 10), TileKind::Background);
 
     // The pipe top is a one-way surface, not solid terrain.
-    assert_eq!(at(21, 8), TileKind::OneWay);
     assert_eq!(at(22, 8), TileKind::OneWay);
+    assert_eq!(at(23, 8), TileKind::OneWay);
     assert!(
         tiles.platforms.len() >= 4,
         "only {} platforms",

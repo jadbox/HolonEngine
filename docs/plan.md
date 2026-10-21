@@ -122,6 +122,15 @@ Compute the 2D spatial CFT cross-power spectrum $\frac{\hat{I}_t \hat{I}_{t-1}^*
     3. Ghost-free stitched World 1-1 background panorama (temporal median removes $> 99\%$ of Mario/Goomba pixels from the static atlas),
     4. Playable `cc unfold smb3.cc` run where Mario runs, jumps onto a one-way screw-box platform, hits a `?` block from below, and stomps a Goomba at $> 120\text{ FPS}$ headless / $60\text{ FPS}$ interactive.
 
+#### Phase 2 audit — defect resolutions (2026-10-21)
+
+1. **Odometry HUD exclusion:** `ScrollEstimator::gray()` now stores `band_h` and limits sampling to rows `0..band_h`, zeroing the static HUD buffer. Eliminates the $\pm 10\text{ px}$ registration smear; clouds and block borders are pixel-sharp.
+2. **Actor mask coordinates:** Pass 3 passes residual boxes directly in frame coordinates (`*b`), ensuring moving actors are properly masked out during atlas synthesis.
+3. **Grounded obstacle shelf extraction:** Grounded components ($h \ge 2\times\text{TILE}$, bottom touching ground line) are segmented into horizontal flat shelves of width $\ge 12\text{ px}$. Pastel block tops and the green pipe top are promoted to one-way collision surfaces while leaving curved green hills as scenery.
+4. **Sprite rendering:** `cc unfold` composites the canonical extracted player sprite with alpha blending, centered and feet-aligned.
+5. **Autonomous Actor Holons & Clifford Patrol / Stomp:** Modeled on Basil Hiley's process ontology. Entities inhabit minimal left ideals $\mathcal{I}_i = \mathcal{C}\ell \epsilon_i$ with state idempotents ($\epsilon_0$ left patrol, $\epsilon_1$ right patrol, $\epsilon_2$ squashed). Lateral wall incidence triggers idempotent reflection $T_{0 \leftrightarrow 1}$. Top-down relational incidence (downward player velocity onto actor top) collapses the actor to $\epsilon_2$ and imparts upward bounce restitution to the player. Demonstrated at $> 2500\text{ Hz}$ headless throughput. Recorded to `recordings/task_demo_smb3_playable.mp4`.
+
+
 ### Phase 3: 3D Raycast Compiler & Wolfenstein 3D Extraction (`cc_field` 3D)
 * **Implementor Steps:**
   1. Add `crates/cc_field/src/enfold3d.rs`:
@@ -148,5 +157,7 @@ Compute the 2D spatial CFT cross-power spectrum $\frac{\hat{I}_t \hat{I}_{t-1}^*
 Development NOTES:
 - Rate your task planning as 1-10 in confidence (10 being the most).
 - Do NOT "overfit" the engine/model to one speicific game (like having is_pipe_green extractor that is only for mario games) as this model should adapt to any 2d or 3d game.
-- be sure your updating task_phase[N].md files with progress and what task is actively being worked on. See and update ./notes.md for developer self-notes for random insights and tips.
-- If you get stuck on a hard problem with low confidence, you can call OpenCode CLI in non-interactive mode to use the great model Google Gemini 4 Argon to give you a solution plan to solve a hard problem. However, Argon is very expensive so only use it when you must. Example "opencode run --model google/argon-4 "Your name is Argon. Explain how closures work in JavaScript"" or adding file context "opencode run --model google/argon-4 -f src/main.ts "Your name is Argon. Review this file for edge cases"
+- be sure your updating task_phase[N].md files with progress and what task is actively being worked on and add any new next tasks discovered to do. See and update ./notes.md for developer self-notes for random insights and tips.
+- If you get stuck on a hard problem with low confidence, you can call OpenCode CLI in non-interactive mode to use the great model Google Gemini 4 Argon to give you a solution plan to solve a hard problem. However, Argon is very expensive so only use it when you are stuck or really need another second oppinion. Example "opencode run --model google/argon-4 "Your name is Argon. Explain how closures work in JavaScript"" or adding file context "opencode run --model google/argon-4 -f src/main.ts "Your name is Argon. Review this file for edge cases"
+- save generated models (like smb3_v2.cc) into the example folder it was used to be generated from (i.e. example_input2d) and override cc models as needed.
+- If you pretty sure you fixed a visual bug, do another new video recording so I can keep up to date. Smartly determine if the bug fix requires folding a new model or just using the last built one (if the bug was just in the use of the model).

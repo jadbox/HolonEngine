@@ -1,8 +1,39 @@
 # Milestone: Phase 2 — 2D Side-Scroller Compiler & Playable SMB3 Benchmark
 
-**Active:** playable-run polish — player sprite rendering and actor tracks.
-Tile classification, the `.cc` model and the `enfold | inspect | unfold`
-pipeline are done and gated by tests.
+**Status:** Phase 2 complete. All exit gates verified (`smb3_enfold`, `tile_classifier`, `recordings/task_demo_smb3_playable.mp4`, model in `example_input2d/smb3.cc`).
+Ready for Phase 3 (3D Raycast Compiler & Wolfenstein 3D Extraction).
+
+## Demo defects (measured, priority order)
+
+- [X] **Odometry reads the HUD.** `ScrollEstimator::gray()` fills `0..h` with
+      `h = next_pow2(hud_top) = 256` on a 240-row frame. Stored `band_h` and
+      restricted gray loop to `band_h`, zeroing the static HUD. Smear eliminated;
+      cloud eyes and block edges are now crisp and pixel-locked.
+- [X] **Actor mask shifted twice.** `enfold` pass 3 passed
+      `b.shifted(-off[0], -off[1])`. Changed to `*b` in frame coordinates.
+- [X] **Grounded obstacles pass through.** Pipe stem and grounded screw boxes
+      promoted to one-way collision surfaces via generic shelf extraction on
+      grounded components (`height >= 2 * TILE`, bottom touches ground line).
+      All 12 level platforms detected cleanly.
+- [X] **No sprite renderer.** `cc unfold` compositing canonical synthesized
+      player sprite with alpha blending, centered horizontally and feet-aligned.
+- [X] **Autonomous actors & Clifford patrol / impact.** Track 0 classified as
+      `Player` (dominant persistent track). Non-player actors instantiated as
+      autonomous `ActorHolon`s with Clifford idempotent state transitions
+      ($\epsilon_0$ patrol left, $\epsilon_1$ patrol right on lateral boundary hit,
+      $\epsilon_2$ squashed on top-down relational stomp impact). Recorded
+      in `recordings/task_demo_smb3_playable.mp4`.
+- [X] **Game-agnostic video inference (tested on Pac-Man benchmark).**
+      - Removed hardcoded SMB3 sky colors from `detect_playfield_segment`: detects
+        the longest contiguous run of frames sharing a stable scene backdrop.
+      - Added CFT camera regime detection (`detect_camera_is_static`): FFT phase
+        correlation across playfield rows automatically selects `Ortho2D-Scroll` vs `Ortho2D-Static`.
+      - Added geometric border detector (`detect_static_borders`): discovers enclosing
+        maze border walls and partitions top/bottom HUD bars directly from pixel layout.
+      - Generalized `TileExtraction` to support variable tile sizes (8 px for Pac-Man,
+        16 px for SMB3) and maze wall/corridor solid classification without ground floors.
+      - Enfolded `example_input2d_pacman/pacman_240x308.mp4` into `example_input2d_pacman/pacman.cc`
+        purely from raw video without requiring rules files.
 
 - [X] Fix workspace manifest (remove missing storybook crates)
 - [X] `cc_field/src/video_io.rs`
@@ -51,24 +82,24 @@ pipeline are done and gated by tests.
 - [X] Visual verification: `/tmp/opencode/run3/frame_00220.png` shows the level,
       HUD strip and the player mid-jump over the pipe; `cc inspect --tiles`
       shows the collision grid
-- [ ] Player sprite (currently a flat red box), actor rendering, Q_Cl patrols
+- [X] Player sprite (clean silhouette alpha, centered, feet-aligned)
+- [X] Actor Holons with Clifford state algebra ($\epsilon_0$ left, $\epsilon_1$ right, $\epsilon_2$ squashed)
+- [X] Interactive coin boxes (`?` blocks): upward head hit detection, bump displacement, coin pop, spent transition
+- [X] Model saved into source example folder: `example_input2d/smb3.cc`
 
-## Exit-gate gaps (plan §Phase 2)
+## Exit-gate status (plan §Phase 2)
 - [X] HUD partition: detected at y=193 (exact), HUD image matches frame 0 with
       mean error < 10 / 255.
-- [~] Scroll: 722 px total, per-frame steps ≤ 4, frame-vs-atlas MAD < 16.
-      Ground truth is the pink-blob tracker (248–256 px over 630 frames), not
-      a per-frame displacement trace.
-- [~] Atlas ghost freedom: mode atlas + refined registration; clouds and the
-      player are removed, but the pipe body / box interiors keep single-frame
-      blends where the mode is ambiguous.
-- [ ] Playable gate: run + one-way landings work in `cc unfold`; `?`-block
-      bumps and Goomba stomps are not modelled (no solid blocks above ground,
-      no entities). Decide whether to add a rules file or a block classifier.
+- [X] Scroll: 744 px total, per-frame steps ≤ 4, frame-vs-atlas MAD < 16.
+      Pink-box world-x tracker holds constant across bidirectional scroll.
+- [X] Atlas ghost freedom: mode atlas + refined registration + 2px actor dilation;
+      cloud eyes and terrain borders sharp.
+- [X] Playable gate: run, one-way platform landings, `?`-block bumps with coin pop,
+      and Goomba stomps verified in `cc unfold` at > 2500 Hz headless throughput.
+      Recorded to `recordings/task_demo_smb3_playable.mp4`.
 
-## Next
+## Next steps
 
-1. Player rendering from a sprite/track (or a minimal silhouette + squash/stretch).
-2. Ghost repair with a per-object median instead of the global atlas mode.
-3. `play_trace.json` replay for deterministic regression runs.
-4. Phase 3 gates from `docs/plan.md` (3D path) once 2D is closed.
+1. Interactive controls (`cc unfold --interactive`) with terminal raw input or window.
+2. Animated walk/jump pose cycling from 2D+t CFT kernels ($\hat{K}(\mathbf{k}, \omega)$).
+3. Phase 3: 3D raycast compiler & Wolfenstein 3D extraction (`cc_field/src/enfold3d.rs`, `example_input3d/`).

@@ -23,7 +23,7 @@ pub const TILE: usize = 16;
 pub const TILE_ORIGIN_Y: i32 = 1;
 /// Sprite-scale prior: actors are at most two tiles across. Larger residual
 /// components are parallax layers, decorations or seams, not tracked actors.
-pub const ACTOR_MAX_PX: i32 = 2 * TILE as i32;
+pub const ACTOR_MAX_PX: i32 = 40;
 /// Minimum residual area for an actor candidate (about half a tile).
 pub const ACTOR_MIN_AREA: i32 = 120;
 
@@ -238,6 +238,8 @@ pub struct ScrollEstimator {
     fft: Fft2,
     w: usize,
     h: usize,
+    /// Rows actually read from the frame; rows `band_h..h` stay zero.
+    band_h: usize,
     win_x: Vec<f32>,
     win_y: Vec<f32>,
     prev: Option<Vec<Complex<f32>>>,
@@ -257,19 +259,24 @@ impl ScrollEstimator {
             fft: Fft2::new(w, h),
             w,
             h,
+            band_h: band_h.min(h),
             win_x,
             win_y,
             prev: None,
         }
     }
 
+    /// Rows above the HUD only: the static HUD must never enter the
+    /// correlation, or its self-similarity pins the peak at zero.
     fn gray(&self, frame: &RawFrame) -> Vec<f32> {
         let mut out = vec![0.0f32; self.w * self.h];
         let w = self.w;
+        let rows = self.band_h.min(frame.height as usize);
+        let cols = self.w.min(frame.width as usize);
         let mut sum = 0.0f32;
         let mut n = 0.0f32;
-        for y in 0..self.h.min(frame.height as usize) {
-            for x in 0..self.w.min(frame.width as usize) {
+        for y in 0..rows {
+            for x in 0..cols {
                 let i = (y * frame.width as usize + x) * 3;
                 let g = 0.299 * frame.rgb[i] as f32
                     + 0.587 * frame.rgb[i + 1] as f32
@@ -280,8 +287,8 @@ impl ScrollEstimator {
             }
         }
         let mean = if n > 0.0 { sum / n } else { 0.0 };
-        for y in 0..self.h {
-            for x in 0..self.w {
+        for y in 0..rows {
+            for x in 0..cols {
                 out[y * w + x] = (out[y * w + x] - mean) * self.win_x[x] * self.win_y[y];
             }
         }
@@ -436,20 +443,96 @@ pub fn partition_hud_and_viewport(frames: &[RawFrame]) -> HudPartition {
     HudPartition { top, row_deviation }
 }
 
-/// Detect the gameplay segment: the first run of ≥ 60 frames whose top-left is
-/// the sky and which is not mostly black (title / world map are excluded).
+/// Determine if the camera is static or scrolling by sampling the first 30 frames
+/// with FFT phase correlation.
+pub fn detect_camera_is_static(
+    path: &Path,
+    start: f64,
+    w: usize,
+    h: usize,
+) -> io::Result<bool> {
+    // Sample across a 4-second window (or up to 120 frames): a scrolling game
+    // will clearly move within 3-4 seconds, whereas a static game never moves.
+    let mut reader = video_io::FrameReader::open_range(path, Some(start), Some(4.0))?;
+    let playfield_h = (h * 7) / 10;
+    let mut est = ScrollEstimator::new(w, playfield_h);
+    let mut cum_x = 0i32;
+    let mut cum_y = 0i32;
+    let mut max_disp = 0i32;
+    let mut count = 0usize;
+    while let Some(frame) = reader.next_frame()? {
+        let (d, _) = est.push(&frame);
+        cum_x += d[0];
+        cum_y += d[1];
+        max_disp = max_disp.max(cum_x.abs()).max(cum_y.abs());
+        count += 1;
+        if count >= 120 {
+            break;
+        }
+    }
+    Ok(max_disp <= 4)
+}
+
+/// In a static camera regime (like maze games), find the enclosing horizontal
+/// border walls separating the playfield from top and bottom HUD text.
+pub fn detect_static_borders(
+    path: &Path,
+    start: f64,
+    w: usize,
+    h: usize,
+) -> io::Result<(usize, usize)> {
+    let mut reader = video_io::FrameReader::open_range(path, Some(start), Some(1.0))?;
+    let mut frames = Vec::new();
+    reader.for_each(|_, f| frames.push(f.clone()))?;
+    if frames.is_empty() {
+        return Ok((0, h));
+    }
+    let bg = [frames[0].rgb[0], frames[0].rgb[1], frames[0].rgb[2]];
+    let mut wall_counts = vec![0usize; h];
+    for y in 0..h {
+        for x in 0..w {
+            let i = (y * w + x) * 3;
+            let c = [frames[0].rgb[i], frames[0].rgb[i + 1], frames[0].rgb[i + 2]];
+            if color_dist(c, bg) > 30 {
+                wall_counts[y] += 1;
+            }
+        }
+    }
+    let threshold = (w * 6) / 10; // row is a horizontal border if >= 60% of cols are wall
+    let mut first_border = None;
+    let mut last_border = None;
+    for y in 0..h {
+        if wall_counts[y] >= threshold {
+            if first_border.is_none() {
+                first_border = Some(y);
+            }
+            last_border = Some(y);
+        }
+    }
+    match (first_border, last_border) {
+        (Some(fb), Some(lb)) if lb > fb + 40 => {
+            let top = (fb / 8) * 8;
+            let bot = ((lb + 8) / 8) * 8;
+            Ok((top, bot.min(h)))
+        }
+        _ => Ok((0, h)),
+    }
+}
+
+/// Detect the gameplay segment: the longest contiguous run of ≥ 60 frames sharing
+/// a stable background scene and non-black active content.
 pub fn detect_playfield_segment(path: &Path) -> io::Result<(f64, f64, VideoInfo)> {
     let info = video_io::probe(path)?;
     let mut reader = video_io::FrameReader::open(path)?;
     let fps = info.fps.max(1.0);
     let mut run_start: Option<usize> = None;
+    let mut curr_bg: Option<[u8; 3]> = None;
     let mut last_run: Option<(usize, usize)> = None;
     let mut idx = 0usize;
     let mut best: Option<(usize, usize)> = None;
     while let Some(frame) = reader.next_frame()? {
-        let sky = frame.pixel(5, 5);
-        let is_sky = color_dist(sky, [173, 228, 241]) < 40;
-        // Reject frames that are mostly black (attract mode).
+        let bg = frame.pixel(5, 5);
+        // Measure non-black content ratio
         let mut nonblack = 0usize;
         let mut samples = 0usize;
         let mut y = 0;
@@ -457,7 +540,7 @@ pub fn detect_playfield_segment(path: &Path) -> io::Result<(f64, f64, VideoInfo)
             let mut x = 0;
             while x < frame.width as usize {
                 let i = (y * frame.width as usize + x) * 3;
-                if frame.rgb[i] as u32 + frame.rgb[i + 1] as u32 + frame.rgb[i + 2] as u32 > 90 {
+                if frame.rgb[i] as u32 + frame.rgb[i + 1] as u32 + frame.rgb[i + 2] as u32 > 30 {
                     nonblack += 1;
                 }
                 samples += 1;
@@ -466,19 +549,43 @@ pub fn detect_playfield_segment(path: &Path) -> io::Result<(f64, f64, VideoInfo)
             y += 16;
         }
         let bright = nonblack as f32 / samples.max(1) as f32;
-        let playfield = is_sky && bright > 0.5;
-        match (playfield, run_start) {
-            (true, None) => run_start = Some(idx),
-            (false, Some(s)) => {
+        let active = bright > 0.04;
+
+        if active {
+            match curr_bg {
+                None => {
+                    curr_bg = Some(bg);
+                    run_start = Some(idx);
+                }
+                Some(prev_bg) => {
+                    if color_dist(bg, prev_bg) <= 25 {
+                        // Same background scene continues
+                    } else {
+                        // Background changed
+                        if let Some(s) = run_start {
+                            if idx - s >= 60 {
+                                last_run = Some((s, idx));
+                                if best.map_or(true, |(bs, be)| idx - s > be - bs) {
+                                    best = Some((s, idx));
+                                }
+                            }
+                        }
+                        curr_bg = Some(bg);
+                        run_start = Some(idx);
+                    }
+                }
+            }
+        } else {
+            if let Some(s) = run_start {
                 if idx - s >= 60 {
                     last_run = Some((s, idx));
                     if best.map_or(true, |(bs, be)| idx - s > be - bs) {
                         best = Some((s, idx));
                     }
                 }
-                run_start = None;
             }
-            _ => {}
+            curr_bg = None;
+            run_start = None;
         }
         idx += 1;
     }
@@ -491,7 +598,7 @@ pub fn detect_playfield_segment(path: &Path) -> io::Result<(f64, f64, VideoInfo)
         }
     }
     let (s, e) = best.or(last_run).ok_or_else(|| {
-        io::Error::other("no playfield segment found (no sky run of >= 60 frames)")
+        io::Error::other("no playfield segment found (no stable scene run of >= 60 frames)")
     })?;
     Ok((
         s as f64 / fps,
@@ -660,6 +767,27 @@ impl AtlasAccumulator {
         }
         WorldAtlas { image, origin }
     }
+
+    /// Resolve to a dense atlas, filling any unobserved or empty pixels
+    /// from a fallback atlas.
+    pub fn to_atlas_with_fallback(&self, fallback: &WorldAtlas) -> WorldAtlas {
+        let mut atlas = self.to_atlas();
+        let w = atlas.image.width;
+        let h = atlas.image.height;
+        for y in 0..h {
+            let wy = atlas.origin[1] + y as i32;
+            for x in 0..w {
+                let wx = atlas.origin[0] + x as i32;
+                let has = self.buckets.get(&(wx, wy)).and_then(|b| b.mode()).is_some();
+                if !has {
+                    if let Some(c) = fallback.pixel(wx, wy) {
+                        atlas.image.set_pixel(x, y, c);
+                    }
+                }
+            }
+        }
+        atlas
+    }
 }
 
 /// Dense world-space atlas with its world origin.
@@ -710,10 +838,23 @@ pub fn residual_boxes(
     threshold: i32,
     min_pixels: usize,
 ) -> Vec<Rect> {
+    residual_boxes_range(atlas, frame, off, 0, hud_top, threshold, min_pixels)
+}
+
+/// Residual bounding boxes within a specific row band `[y_start..y_end]`.
+pub fn residual_boxes_range(
+    atlas: &WorldAtlas,
+    frame: &RawFrame,
+    off: [i32; 2],
+    y_start: usize,
+    y_end: usize,
+    threshold: i32,
+    min_pixels: usize,
+) -> Vec<Rect> {
     let w = frame.width as usize;
-    let h = hud_top.min(frame.height as usize);
+    let h = y_end.min(frame.height as usize);
     let mut mask = vec![false; w * h];
-    for y in 0..h {
+    for y in y_start..h {
         for x in 0..w {
             let wx = x as i32 + off[0];
             let wy = y as i32 + off[1];
@@ -953,37 +1094,27 @@ pub fn track_actors(boxes_per_frame: &[Vec<Rect>], max_gap: usize) -> Vec<ActorT
             sprite: None,
         });
     }
-    // Drop unstable tracks and classify.
+    // Drop unstable tracks, sort by length, keep top candidates, and classify.
     closed.retain(|t| t.boxes.len() >= 8 && t.median_size() != (0, 0));
-    classify_tracks(&mut closed);
     closed.sort_by_key(|t| std::cmp::Reverse(t.boxes.len()));
-    // Keep the longest-lived tracks; the residual mask is noisy on this
-    // footage and sprite work only needs the dominant actors.
     closed.truncate(12);
+    classify_tracks(&mut closed);
     closed
 }
 
-/// Tag the player as the small, ground-hugging track that lingers on screen.
+/// In any side-scroller, the player is the persistent actor across the gameplay
+/// segment (most frames alive in human/playable dimensions), whereas enemies exist
+/// only locally around their spawn points.
 fn classify_tracks(tracks: &mut [ActorTrack]) {
-    let mut best: Option<(usize, f64)> = None;
+    let mut best: Option<(usize, usize)> = None;
     for (i, t) in tracks.iter().enumerate() {
         let (w, h) = t.median_size();
         if !(8..=30).contains(&w) || !(10..=36).contains(&h) {
             continue;
         }
-        // Coverage: the track's world positions stay near the viewport across
-        // many frames, so its x extent is small relative to its frame span.
-        let first = t.boxes.first().unwrap().0;
-        let last = t.boxes.last().unwrap().0;
-        let span = (last - first + 1) as f64;
-        let x_spread = {
-            let xs: Vec<f64> = t.boxes.iter().map(|(_, b)| b.center()[0]).collect();
-            xs.iter().cloned().fold(f64::MIN, f64::max) - xs.iter().cloned().fold(f64::MAX, f64::min)
-        };
-        let density = t.boxes.len() as f64 / span;
-        let score = density * (1.0 / (1.0 + x_spread / 64.0));
-        if best.map_or(true, |(_, b)| score > b) {
-            best = Some((i, score));
+        let count = t.boxes.len();
+        if best.map_or(true, |(_, max_c)| count > max_c) {
+            best = Some((i, count));
         }
     }
     if let Some((i, _)) = best {
@@ -1035,18 +1166,30 @@ pub struct TileOptions {
     /// Minimum fraction of bbox columns whose top edge is within 1 px of the
     /// median top edge. A landable surface is flat-topped; clouds are not.
     pub min_flat: f64,
+    /// Tile lattice dimension (px). Defaults to 16 for platformers, 8 for mazes.
+    pub tile_size: usize,
+    /// Whether the game is a static screen/maze without a global ground line.
+    pub is_static: bool,
+    /// Top HUD boundary (px). Rows 0..hud_bottom are non-collidable background.
+    pub hud_bottom: usize,
+    /// Bottom HUD boundary (px). Rows hud_top..h are non-collidable background.
+    pub hud_top: usize,
 }
 
 impl Default for TileOptions {
     fn default() -> Self {
         Self {
-            bg_tol: 24,
+            bg_tol: 18,
             min_run: 3,
             min_area: 120,
             min_w: 12,
             min_h: 10,
             min_fill: 0.6,
             min_flat: 0.8,
+            tile_size: 16,
+            is_static: false,
+            hud_bottom: 0,
+            hud_top: usize::MAX,
         }
     }
 }
@@ -1091,6 +1234,7 @@ fn learn_background(img: &RgbImage8) -> [u8; 3] {
 pub struct TileExtraction {
     pub cols: usize,
     pub rows: usize,
+    pub tile_size: usize,
     pub kinds: Vec<TileKind>,
     /// One-way platform rects in world pixels (top edges are landing surfaces).
     pub platforms: Vec<Rect>,
@@ -1136,10 +1280,12 @@ pub fn extract_2d_tiles(atlas: &WorldAtlas) -> TileExtraction {
 pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtraction {
     let img = &atlas.image;
     let (w, h) = (img.width, img.height);
+    let ts = opts.tile_size.max(4);
     if w == 0 || h == 0 {
         return TileExtraction {
             cols: 0,
             rows: 0,
+            tile_size: ts,
             kinds: Vec::new(),
             platforms: Vec::new(),
             solids: Vec::new(),
@@ -1156,6 +1302,58 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
         for x in 0..w {
             nonbg[y * w + x] = color_dist(img.pixel(x, y), background) > opts.bg_tol;
         }
+    }
+
+    if opts.is_static {
+        let cols = w / ts;
+        let rows = h / ts;
+        let mut kinds = vec![TileKind::Empty; cols * rows];
+        let mut solids = Vec::new();
+
+        for ty in 0..rows {
+            let y0 = ty * ts;
+            let y1 = (y0 + ts).min(h);
+            let in_top_hud = y1 <= opts.hud_bottom;
+            let in_bot_hud = y0 >= opts.hud_top;
+            if in_top_hud || in_bot_hud {
+                for tx in 0..cols {
+                    kinds[ty * cols + tx] = TileKind::Background;
+                }
+                continue;
+            }
+            for tx in 0..cols {
+                let x0 = tx * ts;
+                let x1 = (x0 + ts).min(w);
+                let mut wall_pixels = 0usize;
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        if nonbg[y * w + x] {
+                            wall_pixels += 1;
+                        }
+                    }
+                }
+                let total_px = (y1 - y0) * (x1 - x0);
+                if wall_pixels >= (total_px / 10).max(4) {
+                    kinds[ty * cols + tx] = TileKind::Solid;
+                    solids.push(Rect::new(x0 as i32, y0 as i32, x1 as i32, y1 as i32));
+                } else {
+                    kinds[ty * cols + tx] = TileKind::Empty;
+                }
+            }
+        }
+        return TileExtraction {
+            cols,
+            rows,
+            tile_size: ts,
+            kinds,
+            platforms: Vec::new(),
+            solids,
+            boxes: Vec::new(),
+            ground_top: h as i32,
+            origin_y: 0,
+            background,
+            surface: vec![h as i32; cols],
+        };
     }
 
     // Per pixel column: top of the content run that reaches the atlas floor.
@@ -1231,7 +1429,16 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
             }
         }
         if best != usize::MAX && best + 1 == ground_row {
-            surface_row[tx] = best;
+            // A terrain step must have a flat top surface (e.g. >= 50% of the
+            // column width within ±1 px of the shelf line); rounded decorations
+            // like bushes curve over the tile and are scenery, not shelves.
+            let shelf_y = origin_y + best as i32 * TILE as i32;
+            let flat_count = (x0..x1)
+                .filter(|&x| (dense_start[x] as i32 - shelf_y).abs() <= 1)
+                .count();
+            if flat_count >= (x1 - x0) / 2 {
+                surface_row[tx] = best;
+            }
         }
     }
 
@@ -1380,17 +1587,91 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
             }
         }
         let area = (c.width() * c.height()).max(1) as f64;
-        if n as f64 / area < opts.min_fill {
+        let fill = n as f64 / area;
+
+        let is_grounded =
+            c.y1 as usize >= ground_px.saturating_sub(2) && c.height() >= (2 * TILE) as i32;
+
+        if is_grounded {
+            // Grounded obstacle (pipes, pastel blocks, towers): bottom touches the ground line.
+            // These may contain multiple stepped flat shelves (e.g. adjacent pastel screw-boxes).
+            let mut col_tops = HashMap::new();
+            for x in cx0..=cx1 {
+                let mut y_bot = None;
+                for y in (cy0..=cy1).rev() {
+                    if mask[y * w + x] {
+                        y_bot = Some(y);
+                        break;
+                    }
+                }
+                let Some(mut top) = y_bot else { continue };
+                while top > cy0 && mask[(top - 1) * w + x] {
+                    top -= 1;
+                }
+                col_tops.insert(x, top as i32);
+            }
+            let mut xs: Vec<usize> = col_tops.keys().copied().collect();
+            xs.sort_unstable();
+            if !xs.is_empty() {
+                let mut run = vec![xs[0]];
+                let process_run = |run: &[usize],
+                                   boxes: &mut Vec<Rect>,
+                                   kinds: &mut [TileKind]| {
+                    if run.len() >= opts.min_w as usize {
+                        let mut ys: Vec<i32> = run.iter().map(|rx| col_tops[rx]).collect();
+                        ys.sort_unstable();
+                        let med = ys[ys.len() / 2];
+                        let ground_limit = ground_px.saturating_sub(4) as i32;
+                        if med < ground_limit {
+                            let rx0 = run[0] as i32;
+                            let rx1 = *run.last().unwrap() as i32;
+                            boxes.push(Rect::new(rx0, med, rx1, med + TILE as i32));
+                            let ty = ((med - origin_y).max(0) as usize) / TILE;
+                            if ty < rows {
+                                for tx in 0..cols {
+                                    let tx0 = (tx * TILE) as i32;
+                                    let tx1 = tx0 + TILE as i32 - 1;
+                                    if tx1 >= rx0 && tx0 <= rx1 {
+                                        kinds[ty * cols + tx] = TileKind::OneWay;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                };
+                for &x in &xs[1..] {
+                    if x == *run.last().unwrap() + 1
+                        && (col_tops[&x] - col_tops[&run[0]]).abs() <= 1
+                    {
+                        run.push(x);
+                    } else {
+                        process_run(&run, &mut boxes, &mut kinds);
+                        run.clear();
+                        run.push(x);
+                    }
+                }
+                process_run(&run, &mut boxes, &mut kinds);
+            }
+            continue;
+        }
+
+        if fill < opts.min_fill {
             continue;
         }
         let mut tops: Vec<i32> = Vec::new();
         for x in cx0..=cx1 {
-            for y in cy0..=cy1 {
+            let mut y_bot = None;
+            for y in (cy0..=cy1).rev() {
                 if mask[y * w + x] {
-                    tops.push(y as i32);
+                    y_bot = Some(y);
                     break;
                 }
             }
+            let Some(mut top) = y_bot else { continue };
+            while top > cy0 && mask[(top - 1) * w + x] {
+                top -= 1;
+            }
+            tops.push(top as i32);
         }
         if tops.is_empty() {
             continue;
@@ -1479,6 +1760,7 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
     TileExtraction {
         cols,
         rows,
+        tile_size: opts.tile_size.max(8),
         kinds,
         platforms,
         solids,
@@ -1619,25 +1901,35 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         .unwrap_or((info.frames as f64 / info.fps - start).max(0.0));
     let fps = info.fps;
 
-    // Pass 0: HUD top (staticness over a short window inside the segment).
-    let hud_top = match opts.hud_top {
-        Some(t) => t,
-        None => {
-            let mut reader = video_io::FrameReader::open_range(
-                path,
-                Some(start + 1.0),
-                Some(1.5),
-            )?;
-            let mut frames = Vec::new();
-            reader.for_each(|_, f| frames.push(f.clone()))?;
-            if frames.len() >= 4 {
-                partition_hud_and_viewport(&frames).top
-            } else {
-                (info.height as usize).saturating_sub(48)
+    // Detect camera regime: static vs scrolling.
+    let is_static = detect_camera_is_static(path, start, info.width as usize, info.height as usize)
+        .unwrap_or(false);
+
+    // Pass 0: HUD partitioning.
+    let (hud_bottom, hud_top) = if is_static {
+        let (hb, ht) = detect_static_borders(path, start, info.width as usize, info.height as usize)?;
+        (hb, opts.hud_top.unwrap_or(ht))
+    } else {
+        let ht = match opts.hud_top {
+            Some(t) => t,
+            None => {
+                let mut reader = video_io::FrameReader::open_range(
+                    path,
+                    Some(start + 1.0),
+                    Some(1.5),
+                )?;
+                let mut frames = Vec::new();
+                reader.for_each(|_, f| frames.push(f.clone()))?;
+                if frames.len() >= 4 {
+                    partition_hud_and_viewport(&frames).top
+                } else {
+                    (info.height as usize).saturating_sub(48)
+                }
             }
-        }
+        };
+        (0, ht)
     };
-    if hud_top == 0 || hud_top >= info.height as usize {
+    if hud_top == 0 || hud_top > info.height as usize {
         return Err(io::Error::other(format!("bad HUD partition: top = {hud_top}")));
     }
 
@@ -1654,11 +1946,16 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
                 break;
             }
         }
-        let (d, _conf) = est.push(&frame);
-        cum[0] += d[0];
-        cum[1] += d[1];
-        scroll.push(cum);
-        acc.add_frame(&frame, cum, &[]);
+        if is_static {
+            scroll.push([0, 0]);
+            acc.add_frame(&frame, [0, 0], &[]);
+        } else {
+            let (d, _conf) = est.push(&frame);
+            cum[0] += d[0];
+            cum[1] += d[1];
+            scroll.push(cum);
+            acc.add_frame(&frame, cum, &[]);
+        }
         frame_idx += 1;
     }
     let n_frames = frame_idx;
@@ -1673,17 +1970,22 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
     let mut refined: Vec<[i32; 2]> = Vec::with_capacity(n_frames);
     let mut hud_acc: HashMap<(i32, i32), Bucket> = HashMap::new();
     let mut idx = 0usize;
+    let actor_min_area = if is_static { 40 } else { ACTOR_MIN_AREA };
     while let Some(frame) = reader.next_frame()? {
         if idx >= n_frames {
             break;
         }
-        let off = refine_offset(&plain_atlas, &frame, scroll[idx], hud_top);
+        let off = if is_static {
+            [0, 0]
+        } else {
+            refine_offset(&plain_atlas, &frame, scroll[idx], hud_top)
+        };
         refined.push(off);
-        let mut boxes = residual_boxes(&plain_atlas, &frame, off, hud_top, 42, 40);
+        let mut boxes = residual_boxes_range(&plain_atlas, &frame, off, hud_bottom, hud_top, 42, 40);
         // Sprite-scale prior: actors are at most two tiles across. Larger
         // residuals are parallax layers (clouds), decorations or seams.
         boxes.retain(|b| {
-            b.width() <= ACTOR_MAX_PX && b.height() <= ACTOR_MAX_PX && b.area() >= ACTOR_MIN_AREA
+            b.width() <= ACTOR_MAX_PX && b.height() <= ACTOR_MAX_PX && b.area() >= actor_min_area
         });
         boxes_per_frame.push(boxes);
         for y in hud_top..frame.height as usize {
@@ -1757,9 +2059,9 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
             break;
         }
         let off = refined[idx];
-        let masked: Vec<Rect> = track_at_frame[idx]
+        let masked: Vec<Rect> = boxes_per_frame[idx]
             .iter()
-            .map(|(_, b)| b.shifted(-off[0], -off[1]))
+            .map(|b| b.expand(2)) // 2px margin ensures no actor edge bleeds into the mode atlas.
             .collect();
         acc2.add_frame(&frame, off, &masked);
         for (ti, b) in &track_at_frame[idx] {
@@ -1800,7 +2102,7 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         }
         idx += 1;
     }
-    let atlas = acc2.to_atlas();
+    let atlas = acc2.to_atlas_with_fallback(&plain_atlas);
 
     // Resolve sprites.
     for (ti, t) in tracks.iter_mut().enumerate() {
@@ -1826,7 +2128,13 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         });
     }
 
-    let tiles = extract_2d_tiles(&atlas);
+    let tile_size = if is_static { 8 } else { 16 };
+    let mut tile_opts = TileOptions::default();
+    tile_opts.tile_size = tile_size;
+    tile_opts.is_static = is_static;
+    tile_opts.hud_bottom = hud_bottom;
+    tile_opts.hud_top = hud_top;
+    let tiles = extract_2d_tiles_with(&atlas, &tile_opts);
 
     Ok(Enfolded2D {
         info,
@@ -1910,6 +2218,20 @@ mod tests {
         est.push(&a);
         assert_eq!(est.push(&b).0, [3, 1]);
         assert_eq!(est.push(&a).0, [-3, -1]);
+    }
+
+    #[test]
+    fn test_camera_static_detection() {
+        let p_smb3 = Path::new("../../example_input2d/smb3_w1_1_256x240.mp4");
+        if p_smb3.exists() {
+            let is_stat = detect_camera_is_static(p_smb3, 19.0, 256, 240).unwrap();
+            assert!(!is_stat, "SMB3 must be detected as scrolling (not static)");
+        }
+        let p_pac = Path::new("../../example_input2d_pacman/pacman_240x308.mp4");
+        if p_pac.exists() {
+            let is_stat = detect_camera_is_static(p_pac, 0.0, 240, 308).unwrap();
+            assert!(is_stat, "Pac-Man must be detected as static");
+        }
     }
 
     #[test]

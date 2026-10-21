@@ -37,6 +37,11 @@ pub struct TrackRecord {
     pub kind: String,
     pub frames: u32,
     pub size: [i32; 2],
+    #[serde(default)]
+    pub spawn: [i32; 2],
+    /// Recorded `(frame_index, x, y)` positions.
+    #[serde(default)]
+    pub trajectory: Vec<[i32; 3]>,
     /// Index into [`ModelManifest::sprites`].
     pub sprite: Option<u32>,
 }
@@ -146,10 +151,28 @@ impl Model2D {
                     sprites.push(png);
                 }
             }
+            let spawn = t
+                .boxes
+                .first()
+                .map(|(fi, b)| {
+                    let s = level.scroll.get(*fi).copied().unwrap_or([0, 0]);
+                    [b.x0 + s[0], b.y0 + s[1]]
+                })
+                .unwrap_or([0, 0]);
+            let trajectory: Vec<[i32; 3]> = t
+                .boxes
+                .iter()
+                .map(|(fi, b)| {
+                    let s = level.scroll.get(*fi).copied().unwrap_or([0, 0]);
+                    [*fi as i32, b.x0 + s[0], b.y0 + s[1]]
+                })
+                .collect();
             tracks.push(TrackRecord {
                 kind: t.kind.as_str().to_string(),
                 frames: t.boxes.len() as u32,
                 size: [w, h],
+                spawn,
+                trajectory,
                 sprite,
             });
         }
@@ -166,7 +189,7 @@ impl Model2D {
                 level.atlas.image.height as u32,
             ],
             origin: level.atlas.origin,
-            tile: crate::enfold2d::TILE as u32,
+            tile: level.tiles.tile_size as u32,
             origin_y: level.tiles.origin_y,
             ground_top: level.tiles.ground_top,
             background: level.tiles.background,
@@ -388,6 +411,8 @@ mod tests {
                     kind: "player".into(),
                     frames: 2,
                     size: [2, 2],
+                    spawn: [0, 0],
+                    trajectory: Vec::new(),
                     sprite: Some(0),
                 }],
             },
