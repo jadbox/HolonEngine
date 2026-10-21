@@ -232,26 +232,29 @@ fn cmd_inspect(args: &[String]) -> io::Result<()> {
     Ok(())
 }
 
-/// A minimal AABB player: gravity, solid tiles, one-way surfaces.
+/// Primary controllable/guided actor holon in a gravitational 2D world.
+/// Bounding dimensions `(w, h)` are learned directly from the compiled `.cc` manifest.
 struct Player {
     x: f32,
     y: f32,
+    w: f32,
+    h: f32,
     vy: f32,
     on_ground: bool,
 }
 
-const PW: f32 = 12.0;
-const PH: f32 = 16.0;
 const GRAVITY: f32 = 0.35;
 const MAX_FALL: f32 = 6.5;
 const RUN: f32 = 1.6;
 const JUMP: f32 = 6.2;
 
 impl Player {
-    fn new(x: f32, y: f32) -> Self {
+    fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
         Self {
             x,
             y,
+            w,
+            h,
             vy: 0.0,
             on_ground: false,
         }
@@ -265,13 +268,16 @@ impl Player {
         jump: bool,
     ) -> Option<usize> {
         // Horizontal: continuous world-space check along the leading edge.
+        // Sample the lower/middle body (feet - 2, feet - 8) so overhead floating blocks
+        // that still have vertical clearance above the ground can be walked under.
         self.x += dir * RUN;
         if dir != 0.0 {
-            let lead = if dir > 0.0 { self.x + PW - 1.0 } else { self.x };
-            for sample_y in [self.y + 1.0, self.y + PH * 0.5, self.y + PH - 1.0] {
+            let lead = if dir > 0.0 { self.x + self.w - 1.0 } else { self.x };
+            let feet = self.y + self.h;
+            for sample_y in [feet - 2.0, feet - 8.0, feet - 14.0] {
                 if let Some(r) = m.solid_at_world(lead, sample_y) {
                     self.x = if dir > 0.0 {
-                        r[0] as f32 - PW
+                        r[0] as f32 - self.w
                     } else {
                         (r[2] + 1) as f32
                     };
@@ -287,14 +293,14 @@ impl Player {
             self.on_ground = false;
         }
         self.vy = (self.vy + GRAVITY).min(MAX_FALL);
-        let prev_feet = self.y + PH;
+        let prev_feet = self.y + self.h;
         self.y += self.vy;
         self.on_ground = false;
 
         if self.vy >= 0.0 {
-            let feet = self.y + PH;
+            let feet = self.y + self.h;
             let mut landed_top: Option<f32> = None;
-            for sample_x in [self.x, self.x + PW * 0.5, self.x + PW - 1.0] {
+            for sample_x in [self.x, self.x + self.w * 0.5, self.x + self.w - 1.0] {
                 if let Some(r) = m.solid_at_world(sample_x, feet) {
                     let top = r[1] as f32;
                     let h = (r[3] - r[1] + 1).max(4) as f32;
@@ -309,19 +315,18 @@ impl Player {
                 }
             }
             if let Some(top) = landed_top {
-                self.y = top - PH;
+                self.y = top - self.h;
                 self.vy = 0.0;
                 self.on_ground = true;
             }
             None
         } else {
-            let head_ext = 10.0f32;
-            let head_y = self.y - head_ext;
+            let head_y = self.y;
             let mut hit_prop: Option<usize> = None;
             let mut hit_bottom: Option<f32> = None;
-            for sample_x in [self.x, self.x + PW * 0.5, self.x + PW - 1.0] {
+            for sample_x in [self.x, self.x + self.w * 0.5, self.x + self.w - 1.0] {
                 if let Some(r) = m.solid_at_world(sample_x, head_y) {
-                    hit_bottom = Some((r[3] + 1) as f32 + head_ext);
+                    hit_bottom = Some((r[3] + 1) as f32);
                     break;
                 }
                 let sx = sample_x.floor() as i32;
@@ -330,7 +335,7 @@ impl Player {
                     sx >= p.rect[0] && sx <= p.rect[2] && sy >= p.rect[1] && sy <= p.rect[3]
                 }) {
                     hit_prop = Some(pi);
-                    hit_bottom = Some((p.rect[3] + 1) as f32 + head_ext);
+                    hit_bottom = Some((p.rect[3] + 1) as f32);
                     break;
                 }
             }
@@ -635,23 +640,21 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
         return Ok(());
     }
 
+    // Load canonical player sprite and learned bounding dimensions from the model.
+    let player_track = model.manifest.tracks.iter().find(|t| t.kind == "player");
+    let player_sprite: Option<image::RgbaImage> = player_track.and_then(|t| {
+        let si = t.sprite? as usize;
+        let bytes = model.sprites.get(si)?;
+        image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+            .ok()
+            .map(|img| img.to_rgba8())
+    });
+    let (pw, ph) = player_track
+        .map(|t| ((t.size[0] - 4).max(10) as f32, (t.size[1] - 2).max(14) as f32))
+        .unwrap_or((12.0, 24.0));
     let spawn_x = 32.0f32;
-    let spawn_y = (m.ground_top as f32 - PH - 1.0).max(0.0);
-    let mut player = Player::new(spawn_x, spawn_y);
-
-    // Load canonical player sprite if present in the model.
-    let player_sprite: Option<image::RgbaImage> = model
-        .manifest
-        .tracks
-        .iter()
-        .find(|t| t.kind == "player")
-        .and_then(|t| {
-            let si = t.sprite? as usize;
-            let bytes = model.sprites.get(si)?;
-            image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
-                .ok()
-                .map(|img| img.to_rgba8())
-        });
+    let spawn_y = (m.ground_top as f32 - ph - 1.0).max(0.0);
+    let mut player = Player::new(spawn_x, spawn_y, pw, ph);
 
     // Instantiate autonomous actor holons from all non-player tracks using their
     // learned world-space excursion tensor `t.span` to orient the initial spinor rotor.
@@ -716,11 +719,11 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
     let t0 = Instant::now();
     let mut captured = 0usize;
     for frame in 0..frames {
-        let prev_feet = player.y + PH;
+        let prev_feet = player.y + player.h;
         // Continuous world-space probes ahead and above the player holon.
-        let ahead = player.x + PW + 12.0;
-        let foot_y = player.y + PH + 2.0;
-        let body_y = player.y + PH * 0.5;
+        let ahead = player.x + player.w + 12.0;
+        let foot_y = player.y + player.h + 2.0;
+        let body_y = player.y + player.h - 8.0;
         let wall = model.solid_at_world(ahead, body_y).is_some();
         let platform = (1..=4).any(|k| {
             let probe_y = foot_y - k as f32 * 16.0;
@@ -736,7 +739,7 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
         });
         let gap = model.solid_at_world(ahead, foot_y).is_none()
             && model.one_way_at_world(ahead, foot_y).is_none();
-        let center_x = (player.x + PW * 0.5).floor() as i32;
+        let center_x = (player.x + player.w * 0.5).floor() as i32;
         let foot_yi = foot_y.floor() as i32;
         let under_coin_box = player.on_ground
             && coins_collected == 0
@@ -759,9 +762,9 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
         let actor_ahead = !approaching_coin_box
             && actors.iter().any(|a| {
                 a.cde.state() != 2
-                    && (a.x - (player.x + PW)) > 40.0
-                    && (a.x - (player.x + PW)) < 62.0
-                    && (a.y - (player.y + PH)).abs() < 24.0
+                    && (a.x - (player.x + player.w)) > 40.0
+                    && (a.x - (player.x + player.w)) < 62.0
+                    && (a.y + a.h - (player.y + player.h)).abs() < 24.0
             });
         let jump = player.on_ground
             && (wall || platform || actor_ahead || under_coin_box || (gap && frame % 3 == 0));
@@ -836,11 +839,11 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
             }
 
             // Top-down relational incidence: downward player motion onto the actor's top boundary
-            let feet = player.y + PH;
+            let feet = player.y + player.h;
             if player.vy > 0.0
                 && feet >= a.y
                 && prev_feet <= a.y + 6.0
-                && (player.x + PW) > a.x
+                && (player.x + player.w) > a.x
                 && player.x < (a.x + a.w)
             {
                 // Downward impact: collapse actor CDE to post-impact state (State 2, amplitude -> 0)
@@ -863,7 +866,7 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
 
         // Camera follows the player, clamped to the atlas.
         let max_cam = aw.saturating_sub(vw);
-        let cam_x = ((player.x + PW / 2.0 - vw as f32 / 2.0).round() as usize).min(max_cam);
+        let cam_x = ((player.x + player.w / 2.0 - vw as f32 / 2.0).round() as usize).min(max_cam);
         let cam_y = 0usize.min(ah.saturating_sub(vh));
 
         let hud_top = m.hud_top as usize;
@@ -991,8 +994,8 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
         if let Some(sprite) = &player_sprite {
             let sw = sprite.width() as i32;
             let sh = sprite.height() as i32;
-            let sy_off = (py + PH as i32) - sh;
-            let sx_off = px + (PW as i32 - sw) / 2;
+            let sy_off = (py + player.h as i32) - sh;
+            let sx_off = px + (player.w as i32 - sw) / 2;
             let run_flip = player.on_ground && (frame / 6) % 2 == 1;
             for sy in 0..sh {
                 let dy = sy_off + sy;
@@ -1017,8 +1020,8 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                 }
             }
         } else {
-            for y in py.max(0)..(py + PH as i32).min(vh as i32) {
-                for x in px.max(0)..(px + PW as i32).min(vw as i32) {
+            for y in py.max(0)..(py + player.h as i32).min(vh as i32) {
+                for x in px.max(0)..(px + player.w as i32).min(vw as i32) {
                     let i = (y as usize * vw + x as usize) * 3;
                     buf[i] = 235;
                     buf[i + 1] = 60;
