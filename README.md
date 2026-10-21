@@ -11,7 +11,7 @@ Conventional game engines hardcode per-game state machines (`if is_pacman { eat_
 
 https://github.com/user-attachments/assets/a214ebfa-f938-470a-b090-c4699b71aa6a
 
-https://github.com/user-attachments/assets/9b4b6bef-dfb3-49c5-ac67-6c1b7fbab597
+https://github.com/user-attachments/assets/4bb0469c-7662-4dbb-a954-b8ed6b99f51d
 
 ---
 
