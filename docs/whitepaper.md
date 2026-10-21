@@ -1,4 +1,4 @@
-# The Clifford Implicate World Compiler (`cliffordcore`)
+# HolonEngine: The Implicate World Compiler
 ### Architecture & Systems Whitepaper: Process Ontology, Clifford Density Elements, and Active Information
 
 ---
@@ -9,7 +9,7 @@
 1. **Atomistic State Machines (Traditional Engines):** Sealed structs sit inside an inert coordinate void, governed by hand-coded boolean flags and game-specific branching (`if is_pacman { eat_dot() } else if is_mario { stomp_goomba() }`).
 2. **Frame-by-Frame Neural Hallucination (Autoregressive Video Models):** Pixel buffers are predicted statistically per frame without persistent geometry, conservation laws, or object identity.
 
-`cliffordcore` implements a third architecture grounded in **David Bohm and Basil Hiley's Implicate Order** (*The Undivided Universe*; Hiley & Callaghan 2010, `docs/1011.4031_hiley_clifford_quantum_potential.pdf`) and **Projective Geometric Algebra ($\mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$)**:
+`HolonEngine` implements a third architecture grounded in **David Bohm and Basil Hiley's Implicate Order** (*The Undivided Universe*; Hiley & Callaghan 2010, `docs/1011.4031_hiley_clifford_quantum_potential.pdf`) and **Projective Geometric Algebra ($\mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$)**:
 * **Enfoldment (`cc enfold`):** Compiles raw gameplay video into an invariant **Implicate World Model (`.cc`)**—extracting camera `Motor` odometry, ghost-free world panoramas, oriented PGA boundary blades, chromatic/semantic spinor signatures, and canonical actor processes without game-specific rules.
 * **Unfoldment (`cc unfold`):** Runs the compiled `.cc` model forward at thousands of hertz as a unified, zero-AI Clifford dynamical system where every entity is an algebraic process coupled to the surrounding spatial medium.
 
@@ -18,7 +18,7 @@
 ## 2. Core Algebraic Abstractions (`cc_math`)
 
 ### 2.1 Minimal Left Ideals & The Clifford Density Element (`CliffordDensityElement`)
-Following Hiley & Callaghan (2010, §2.1–2.5), `cliffordcore` dispense with external state vectors and ad-hoc entity flags. Every world entity (player, autonomous actor, interactive block, collectible token) is an **Algebraic Holon** inhabiting a minimal left ideal $\mathcal{I}_i = \mathcal{C}\ell\,\epsilon_i$:
+Following Hiley & Callaghan (2010, §2.1–2.5), `HolonEngine` dispenses with external state vectors and ad-hoc entity flags. Every world entity (player, autonomous actor, interactive block, collectible token) is an **Algebraic Holon** inhabiting a minimal left ideal $\mathcal{I}_i = \mathcal{C}\ell\,\epsilon_i$:
 
 $$\Phi_{L,i}(r, t) = \phi_{L,i}(r, t)\,\epsilon_{i,s} = R_i(r, t)\,U_i(r, t)\,\epsilon_{i,s}$$
 
@@ -98,5 +98,35 @@ $$\mathcal{Q}_{\text{Cl}} = -(\nabla^2 \Psi)\Psi^{-1} = \underbrace{-\frac{\nabl
    * Frame-to-frame assignment minimizes a joint spatial + spinor-coherence cost $d(\mathbf{x}_a, \mathbf{x}_b) + \lambda \|\psi_a - \psi_b\|$ under both Euclidean and toroidal (warp-tunnel) metrics.
    * Non-overlapping track fragments with matching spinor coherence ($\|\psi_a - \psi_b\| \le \tau_\psi$) are unified into a single persistent `ActorTrack`.
    * Processes with world displacement $\max(\Delta X, \Delta Y) \ge 10\text{ px}$ ($\mathbf{P}_B \neq 0$) are compiled into mobile `ActorTrack`s and masked out of the static background atlas in Pass 3; stationary blinking sites ($\mathbf{P}_B = 0$) remain anchored in the world lattice.
-5. **Inferred Field Constants (`infer_world_gravity`):**
-   Analyzes vertical acceleration $\Delta^2 y_t$ and ground-surface support across extracted tracks to infer whether the world is governed by downward gravity ($g_y > 0$) or planar zero-gravity kinematics ($g_y = 0$).
+5. **Inferred Field Constants & Learned Kinematic Excursion Tensors (`TrackRecord::span`, `TrackRecord::velocity`):**
+   * Analyzes ground-surface support (`ground_top < atlas_height`) to infer whether the world is governed by downward gravity ($g_y > 0$) or planar zero-gravity kinematics ($g_y = 0$).
+   * Records each holon's world-space excursion tensor $\Delta \mathbf{X}_i = [\Delta X_i, \Delta Y_i]$ and mean velocity $\bar{\mathbf{v}}_i = [\bar{v}_x, \bar{v}_y]$ directly in the `.cc` manifest.
+   * **Zero Pixel-Dimension Heuristics:** Whether a holon patrols horizontally along $e_1$, oscillates vertically along $e_2$, or navigates 2D corridors is determined purely by its observed world-space excursion tensor $\Delta \mathbf{X}_i$:
+     * If $\Delta Y_i > 2\,\Delta X_i$, the `CliffordDensityElement` rotor is initialized along $-e_2$ ($\theta_0 = -\pi/2$) and evolves via `bohm_momentum` + `reflect_at_boundary` between its learned world excursion bounds $[Y_0 - \Delta Y_i,\; Y_0]$.
+     * Otherwise, in gravitational worlds the rotor is initialized along $e_1$ ($\theta_0 = \pi$) and reflects at tile boundaries; in planar zero-gravity worlds ($g_y = 0$), the rotor is steered continuously by $\mathcal{Q}_{\text{Cl}}$ quantum torque (`apply_quantum_torque`).
+   * **Camera-Coupled State Branches & Composite Rejection:**
+     * In scrolling worlds, non-primary track segments that translate continuously with the camera flow ($\Delta X_i \ge 150\text{ px}$ and $\bar{v}_x \ge 1.2\text{ px/frame}$) are recognized as state-idempotent branches ($\epsilon_0, \epsilon_1, \dots$) of the `Player` holon rather than separate enemy spawns.
+     * In planar arenas, short-lived bounding boxes whose area exceeds $\frac{3}{2}$ of the primary holon scale ($\text{area}_i > 1.5\,\text{area}_0$ and $N_i < \frac{1}{3}N_0$) are identified as transient two-actor overlap composites and rejected.
+
+---
+
+## 5. Architectural Assessment: Tile-Free Continuous Implicate World Representation
+
+### 5.1 Why a 2D World Model Must Not Assume a Tile Grid
+Many 2D games—vector space arenas (*Asteroids*, *Lunar Lander*, *Geometry Wars*), hand-painted continuous worlds (*Braid*, *Rayman*, *Limbo*), physics sandboxes (*Worms*), and freeform arcade tables (*Pinball*, *Pong*)—have **no discrete tile grid**. Even in games that use tiles (*Super Mario Bros. 3*, *Pac-Man*), treating `kinds: Vec<TileKind>` as the primary world ontology introduces artificial quantization, fixed cell-size assumptions, and axis-aligned bias.
+
+In accordance with `docs/storybook_philosophy.md` (§1.1, §4.2), the fundamental representation of a world in `HolonEngine` is **continuous**:
+
+1. **Continuous PGA Boundary Blades ($B_k \in \mathbb{G}_{3,0,1}$):**
+   Static and semi-permeable world structures are stored in continuous world coordinates (`ModelManifest::solids`, `ModelManifest::platforms`, `ModelManifest::collectibles`, and oriented PGA lines `OrientedLine2`):
+   $$L_k = n_{x,k} e_1 + n_{y,k} e_2 + d_k e_0 \in \mathbb{G}_{3,0,1}, \qquad \mathbf{x} \in [\mathbf{p}_{0,k}, \mathbf{p}_{1,k}]$$
+   * `Model2D::solid_at_world(wx, wy)` and `Model2D::one_way_at_world(wx, wy)` evaluate incidence directly in continuous world space $(X, Y) \in \mathbb{R}^2$.
+   * `Model2D::is_open_below_rect(r)` inspects the continuous world atlas beneath a boundary segment to distinguish suspended interactive props from grounded terrain without referencing tile rows or columns.
+   * `segment_hit_oriented_line` (`crates/cc_math/src/pga.rs`) resolves arbitrary-angle boundary incidence ($\langle \mathbf{P}_B, \hat{\mathbf{n}}_k \rangle < 0$) for non-axis-aligned slopes and polygonal contours.
+
+2. **Continuous Field Impedance & $\mathcal{Q}_{\text{Cl}}$ Construction (`Model2D::build_continuous_qfield`):**
+   The Clifford Quantum Potential $\mathcal{Q}_{\text{Cl}} = -(\nabla^2 R)/R$ is constructed directly from continuous world-space geometry (`solids`, `platforms`, `collectibles`) over $[0, W_{\text{world}}] \times [0, H_{\text{world}}]$—requiring **zero tile metadata** (`tile = 0, cols = 0, rows = 0, kinds = []` is a valid, fully functional `.cc` model, verified by `model2d::tests::tile_free_continuous_world_queries_and_qfield`).
+
+3. **Bragg Lattice Snapping as an Optional Spectral Regularizer:**
+   When the 2D CFT of the temporal-mode world atlas $\hat{A}(k_x, k_y)$ exhibits sharp Bragg peaks at $(k_{\text{tile},x}, k_{\text{tile},y}) = (2\pi/\lambda_x, 2\pi/\lambda_y)$ with peak-to-median spectral energy exceeding threshold $\tau_{\text{Bragg}}$, Active-GATr applies the Manhattan/lattice regularizer (Term 1 of $\mathcal{E}_{\text{GATr}}$) to snap noisy pixel contours onto the discovered period $(\lambda_x, \lambda_y)$. When no Bragg peak is present (continuous/non-tile 2D games), $\tau_{\text{Bragg}}$ is not met and boundaries remain unquantized continuous PGA contours in $\mathbb{G}_{3,0,1}$.
+

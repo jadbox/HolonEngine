@@ -1,4 +1,4 @@
-# cliffordcore — Builder Notes
+# HolonEngine — Builder Notes
 
 ## Benchmark facts (verified by frame inspection)
 - Prefer `example_input2d/smb3_w1_1_256x240.mp4` (native 256x240) over the 320x240 upscale. Tiles are exactly 16x16.
@@ -57,7 +57,9 @@
 - Detect camera regime via FFT phase correlation across playfield rows over a 3-4 second window: cumulative drift $\le 4$ px classifies the game as `Ortho2D-Static`.
 - In a static regime, cumulative scroll is identically $[0, 0]$; the temporal mode over the stream builds a clean actor-free panorama of the entire arena.
 - Enclosing maze walls are discovered directly by locating rows with horizontal wall runs spanning $\ge 60\%$ of columns, neatly isolating the playfield from top and bottom HUD text without hardcoded row numbers.
-- In top-down maze games, ground lines do not exist: tiles containing wall pixels are classified as `TileKind::Solid` (4-sided obstacles), corridor cells as `TileKind::Empty`, and outer text strips as `TileKind::Background`.
+- **Topological Wall vs. Collectible Separation:** Naive per-tile pixel counting (`wall_pixels >= 4`) misclassifies corridor tiles containing $2 \times 2$ dots or $8 \times 8$ energizers as `TileKind::Solid`. Instead, segment 8-connected components of `nonbg` inside the playfield: components with bounding-box span $\max(w, h) \ge 2 \times \text{tile\_size}$ form `wall_mask` (`TileKind::Solid`), while isolated components with $\max(w, h) \le \text{tile\_size} + 4$ are extracted into `ModelManifest::collectibles`.
+- **Spinor-Coherent Actor Tracking & Composite Rejection:** Match residual boxes across frames using joint spatial + chromatic spinor distance (`residual_boxes_with_color`, `track_actors_coherent`) with toroidal horizontal wrap in static arenas. Unify non-overlapping track fragments sharing `color_dist <= 35` and compatible size (`<= 8 px`), and reject transient two-actor overlap composites ($\text{area} > 1.5 \times \text{primary\_area}$ and $\text{frames} < \text{primary\_frames} / 3$).
+- **Learned Kinematic Excursion Tensors (`TrackRecord::span`):** Do not use sprite-size heuristics (`h >= 30 && w <= 22`) to infer vertical vs. horizontal behavior. Instead, orient each holon's `CliffordDensityElement` rotor from its observed world-space excursion $[\Delta X, \Delta Y]$: if $\Delta Y > 2\,\Delta X$, initialize along $-e_2$ and reflect across $[Y_0 - \Delta Y, Y_0]$; otherwise initialize along $e_1$.
 
 ## Architecture decisions
 - `cc_field` owns video IO, 2D enfold, atlas, tiles, actor tracks, sprite CFT, and the `.cc` (CC2D) model format.

@@ -23,17 +23,12 @@ Ready for Phase 3 (3D Raycast Compiler & Wolfenstein 3D Extraction).
       ($\epsilon_0$ patrol left, $\epsilon_1$ patrol right on lateral boundary hit,
       $\epsilon_2$ squashed on top-down relational stomp impact). Recorded
       in `recordings/task_demo_smb3_playable.mp4`.
-- [X] **Game-agnostic video inference (tested on Pac-Man benchmark).**
-      - Removed hardcoded SMB3 sky colors from `detect_playfield_segment`: detects
-        the longest contiguous run of frames sharing a stable scene backdrop.
-      - Added CFT camera regime detection (`detect_camera_is_static`): FFT phase
-        correlation across playfield rows automatically selects `Ortho2D-Scroll` vs `Ortho2D-Static`.
-      - Added geometric border detector (`detect_static_borders`): discovers enclosing
-        maze border walls and partitions top/bottom HUD bars directly from pixel layout.
-      - Generalized `TileExtraction` to support variable tile sizes (8 px for Pac-Man,
-        16 px for SMB3) and maze wall/corridor solid classification without ground floors.
-      - Enfolded `example_input2d_pacman/pacman_240x308.mp4` into `example_input2d_pacman/pacman.cc`
-        purely from raw video without requiring rules files.
+- [X] **Game-agnostic video inference & Clifford Density Element (`cc_math::holon`).**
+      - Implemented `CliffordDensityElement` ($\rho_c = \Phi_L \widetilde{\Phi}_L = \rho U \epsilon_s \widetilde{U}$) in `crates/cc_math/src/holon.rs` with first-kind (`heading_vector`, `signature_coherence`) and second-kind (`bohm_momentum`, `apply_quantum_torque`, `reflect_at_boundary`) bilinear invariants.
+      - Removed sprite-dimension heuristics (`t.size[1] >= 30 && t.size[0] <= 22`) in favor of learned world-space excursion tensors (`TrackRecord::span`, `TrackRecord::velocity`).
+      - Separated extended structural walls ($\max(w, h) \ge 2 \times \text{tile}$) from isolated corridor collectibles ($\max(w, h) \le \text{tile} + 4$, `ModelManifest::collectibles`) via 8-connected components, eliminating Pac-Man-specific RGB dot checks in `cc unfold`.
+      - Added chromatic-spinor-coherent tracking (`track_actors_coherent`) with toroidal wrap and transient 2-body overlap composite rejection.
+      - Enfolded `example_input2d/smb3.cc` and `example_input2d_pacman/pacman.cc` and recorded verified demos to `recordings/task_demo_smb3_playable.mp4` and `recordings/task_demo_pacman_replay.mp4`.
 
 - [X] Fix workspace manifest (remove missing storybook crates)
 - [X] `cc_field/src/video_io.rs`

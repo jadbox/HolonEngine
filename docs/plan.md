@@ -1,4 +1,4 @@
-# Execution Plan: The Clifford Implicate World Compiler (`cliffordcore`)
+# Execution Plan: The HolonEngine Implicate World Compiler (`HolonEngine`)
 
 > **Revision 2026-10-21 (v3) — 2D-First (`example_input2d`) $\to$ 3D (`example_input3d`) Progression & Carmack Implementation Spec.**
 >
@@ -11,7 +11,7 @@
 
 ## 1. Architectural Thesis
 
-Grounded in `general_philosophy.md` with the core concept in `storybook_philosophy.md`, `cliffordcore` compiles gameplay video(s) and text rules into a deterministic, playable Clifford world model:
+Grounded in `general_philosophy.md` with the core concept in `storybook_philosophy.md` and the 'whitepaper.md' for engine technicals. `HolonEngine` compiles gameplay video(s) and text rules into a deterministic, playable Clifford world model:
 
 1. **The Implicate Holon ($\mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$):** Every world component is compiled into:
    $$\mathcal{H}_i = \left(B_i \in \mathbb{G}_{3,0,1},\; \psi_i \in (\mathbb{G}_{2,0}^+)^K,\; \{\epsilon_{i,s}, \hat{K}_{i,s}(\mathbf{k}, \omega)\}\right)$$
@@ -35,7 +35,7 @@ Grounded in `general_philosophy.md` with the core concept in `storybook_philosop
 * **Local AI Transducer:** `llama.cpp` (`llama-server` / `llama-mtmd-cli` / `llama-embedding`) with SHA-256 content-addressed caching under `<input_dir>/.cc_cache/`.
 
 ```text
-cliffordcore/
+holonengine/
 ├── Cargo.toml
 ├── example_input2d/   # Super Mario Bros. 3 World 1-1 (256x240, 320x240, 720p + rules.md)
 ├── example_input3d/   # Wolfenstein 3D Episode 1 Floor 1 (320x240, 720p + rules.md)
@@ -128,7 +128,9 @@ Compute the 2D spatial CFT cross-power spectrum $\frac{\hat{I}_t \hat{I}_{t-1}^*
 2. **Actor mask coordinates:** Pass 3 passes residual boxes directly in frame coordinates (`*b`), ensuring moving actors are properly masked out during atlas synthesis.
 3. **Grounded obstacle shelf extraction:** Grounded components ($h \ge 2\times\text{TILE}$, bottom touching ground line) are segmented into horizontal flat shelves of width $\ge 12\text{ px}$. Pastel block tops and the green pipe top are promoted to one-way collision surfaces while leaving curved green hills as scenery.
 4. **Sprite rendering:** `cc unfold` composites the canonical extracted player sprite with alpha blending, centered and feet-aligned.
-5. **Autonomous Actor Holons & Clifford Patrol / Stomp:** Modeled on Basil Hiley's process ontology. Entities inhabit minimal left ideals $\mathcal{I}_i = \mathcal{C}\ell \epsilon_i$ with state idempotents ($\epsilon_0$ left patrol, $\epsilon_1$ right patrol, $\epsilon_2$ squashed). Lateral wall incidence triggers idempotent reflection $T_{0 \leftrightarrow 1}$. Top-down relational incidence (downward player velocity onto actor top) collapses the actor to $\epsilon_2$ and imparts upward bounce restitution to the player. Demonstrated at $> 2500\text{ Hz}$ headless throughput. Recorded to `recordings/task_demo_smb3_playable.mp4`.
+5. **Autonomous Actor Holons & Clifford Patrol / Stomp:** Modeled on Basil Hiley's process ontology (`crates/cc_math/src/holon.rs`, `CliffordDensityElement`). Entities inhabit minimal left ideals $\mathcal{I}_i = \mathcal{C}\ell \epsilon_i$ with density element $\rho_{c,i} = \Phi_{L,i}\widetilde{\Phi}_{L,i} = \rho_i U_i \epsilon_{i,s}\widetilde{U}_i$, bilinear heading $\mathbf{s}_i = U_i e_1 \widetilde{U}_i$, and Bohm momentum $\mathbf{P}_{B,i} = \rho_i v_{0,i} \mathbf{s}_i$. Principal mobility axis ($e_1$ vs $e_2$) and excursion bounds are inferred directly from the observed world-space excursion tensor `TrackRecord::span` without sprite-size heuristics. Lateral or vertical excursion boundary incidence triggers rotor reflection $U_i \mapsto N U_i \widetilde{N}$ and idempotent transition $T_{0 \leftrightarrow 1}$. Top-down relational incidence collapses the actor to $\epsilon_2$ ($\rho_i \to 0$) and imparts upward bounce restitution to the player. Demonstrated at $> 2500\text{ Hz}$ headless throughput (`recordings/task_demo_smb3_playable.mp4`).
+6. **Planar Zero-Gravity Arena Generalization (`example_input2d_pacman`):** Added spectral static-camera detection (`detect_camera_is_static`), topological 8-connected-component separation of extended maze walls ($\max(w, h) \ge 2 \times \text{tile}$) vs isolated corridor collectible excitations ($\max(w, h) \le \text{tile} + 4$, stored in `ModelManifest::collectibles`), chromatic-spinor-coherent actor tracking (`track_actors_coherent`) with toroidal warp-tunnel distance and composite-overlap rejection, and $\mathcal{Q}_{\text{Cl}}$-guided planar unfoldment (`recordings/task_demo_pacman_replay.mp4`) with zero game-specific RGB constants.
+7. **Tile-Free Continuous World Representation (`Model2D::solid_at_world`, `one_way_at_world`, `is_open_below_rect`, `build_continuous_qfield`):** Decoupled runtime collision and $\mathcal{Q}_{\text{Cl}}$ potential synthesis from discrete tile grids (`kinds: Vec<TileKind>`). Continuous world-space boundary rects/lines (`solids`, `platforms`, `collectibles`, `OrientedLine2`) are now the primary geometric representation so non-tile 2D games (vector arenas, freeform contours, curved slopes) execute with `tile = 0, kinds = []`, treating Bragg-lattice snapping strictly as an optional spectral prior when periodic CFT peaks exist.
 
 
 ### Phase 3: 3D Raycast Compiler & Wolfenstein 3D Extraction (`cc_field` 3D)

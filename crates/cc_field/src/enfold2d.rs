@@ -874,6 +874,67 @@ pub fn residual_boxes_range(
     connected_boxes(&mask, w, h, min_pixels)
 }
 
+/// Residual bounding boxes along with the mean foreground RGB colour of their
+/// active residual pixels (used for chromatic-spinor coherent tracking).
+pub fn residual_boxes_with_color(
+    atlas: &WorldAtlas,
+    frame: &RawFrame,
+    off: [i32; 2],
+    y_start: usize,
+    y_end: usize,
+    threshold: i32,
+    min_pixels: usize,
+) -> Vec<(Rect, [u8; 3])> {
+    let w = frame.width as usize;
+    let h = y_end.min(frame.height as usize);
+    let mut mask = vec![false; w * h];
+    for y in y_start..h {
+        for x in 0..w {
+            let wx = x as i32 + off[0];
+            let wy = y as i32 + off[1];
+            if let Some(a) = atlas.pixel(wx, wy) {
+                let i = (y * w + x) * 3;
+                let c = [frame.rgb[i], frame.rgb[i + 1], frame.rgb[i + 2]];
+                let d = (c[0] as i32 - a[0] as i32)
+                    .abs()
+                    .max((c[1] as i32 - a[1] as i32).abs())
+                    .max((c[2] as i32 - a[2] as i32).abs());
+                if d > threshold {
+                    mask[y * w + x] = true;
+                }
+            }
+        }
+    }
+    let rects = connected_boxes(&mask, w, h, min_pixels);
+    rects
+        .into_iter()
+        .map(|r| {
+            let mut sr = 0u64;
+            let mut sg = 0u64;
+            let mut sb = 0u64;
+            let mut n = 0u64;
+            for y in r.y0.max(0)..=r.y1.min(h as i32 - 1) {
+                for x in r.x0.max(0)..=r.x1.min(w as i32 - 1) {
+                    let idx = y as usize * w + x as usize;
+                    if mask[idx] {
+                        let p = idx * 3;
+                        sr += frame.rgb[p] as u64;
+                        sg += frame.rgb[p + 1] as u64;
+                        sb += frame.rgb[p + 2] as u64;
+                        n += 1;
+                    }
+                }
+            }
+            let col = if n > 0 {
+                [(sr / n) as u8, (sg / n) as u8, (sb / n) as u8]
+            } else {
+                [128, 128, 128]
+            };
+            (r, col)
+        })
+        .collect()
+}
+
 /// 4-connected components → bounding boxes (dilated by 1 px).
 fn connected_boxes(mask: &[bool], w: usize, h: usize, min_pixels: usize) -> Vec<Rect> {
     let mut seen = vec![false; w * h];
@@ -1004,8 +1065,10 @@ impl Sprite2D {
 #[derive(Clone, Debug)]
 pub struct ActorTrack {
     pub kind: ActorKind,
-    /// `(frame_index, world_box)` for every detection.
+    /// `(frame_index, frame_box)` for every detection.
     pub boxes: Vec<(usize, Rect)>,
+    /// Mean chromatic spinor signature (RGB) of the holon.
+    pub color: [u8; 3],
     pub sprite: Option<Sprite2D>,
 }
 
@@ -1029,56 +1092,105 @@ impl ActorTrack {
 
 /// Match residual boxes across frames into tracks.
 pub fn track_actors(boxes_per_frame: &[Vec<Rect>], max_gap: usize) -> Vec<ActorTrack> {
+    let colored: Vec<Vec<(Rect, [u8; 3])>> = boxes_per_frame
+        .iter()
+        .map(|v| v.iter().map(|b| (*b, [128, 128, 128])).collect())
+        .collect();
+    let scroll = vec![[0, 0]; boxes_per_frame.len()];
+    track_actors_coherent(&colored, &scroll, 256, false, max_gap).0
+}
+
+/// Spinor-coherent multi-frame actor tracker.
+///
+/// Matches residual boxes using joint spatial + chromatic spinor distance,
+/// filters out stationary blinking props ($\nabla S = 0$), and merges
+/// non-overlapping track fragments sharing the same chromatic spinor signature.
+/// Returns `(top_classified_tracks, all_moving_tracks_for_atlas_masking)`.
+pub fn track_actors_coherent(
+    boxes_per_frame: &[Vec<(Rect, [u8; 3])>],
+    scroll: &[[i32; 2]],
+    viewport_w: usize,
+    is_static: bool,
+    max_gap: usize,
+) -> (Vec<ActorTrack>, Vec<ActorTrack>) {
     struct Open {
         boxes: Vec<(usize, Rect)>,
         last: usize,
         last_box: Rect,
+        color: [f64; 3],
     }
     let mut open: Vec<Open> = Vec::new();
     let mut closed: Vec<ActorTrack> = Vec::new();
+    let max_dist = if is_static { 24.0 } else { 32.0 };
+    let vw = viewport_w.max(1) as f64;
+
     for (fi, boxes) in boxes_per_frame.iter().enumerate() {
-        let mut used = vec![false; boxes.len()];
-        for t in open.iter_mut() {
+        let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+        for (ti, t) in open.iter().enumerate() {
             if fi - t.last > max_gap {
                 continue;
             }
-            // Nearest box within reach.
             let tc = t.last_box.center();
-            let mut best: Option<(usize, f64)> = None;
-            for (bi, b) in boxes.iter().enumerate() {
-                if used[bi] {
-                    continue;
-                }
+            let tw = t.last_box.width();
+            let th = t.last_box.height();
+            for (bi, (b, bcol)) in boxes.iter().enumerate() {
                 let c = b.center();
-                let d = ((c[0] - tc[0]).powi(2) + (c[1] - tc[1]).powi(2)).sqrt();
-                let size_ok = (b.width() - t.last_box.width()).abs() <= 12
-                    && (b.height() - t.last_box.height()).abs() <= 12;
-                if d <= 32.0 && size_ok && best.map_or(true, |(_, bd)| d < bd) {
-                    best = Some((bi, d));
+                let dx = if is_static {
+                    let raw = (c[0] - tc[0]).abs();
+                    raw.min(vw - raw)
+                } else {
+                    (c[0] - tc[0]).abs()
+                };
+                let dy = (c[1] - tc[1]).abs();
+                let d = (dx * dx + dy * dy).sqrt();
+                let cd = (bcol[0] as f64 - t.color[0])
+                    .abs()
+                    .max((bcol[1] as f64 - t.color[1]).abs())
+                    .max((bcol[2] as f64 - t.color[2]).abs());
+                let size_ok = (b.width() - tw).abs() <= 12 && (b.height() - th).abs() <= 12;
+                if d <= max_dist && cd <= 55.0 && size_ok {
+                    pairs.push((d + 0.4 * cd, ti, bi));
                 }
-            }
-            if let Some((bi, _)) = best {
-                used[bi] = true;
-                t.boxes.push((fi, boxes[bi]));
-                t.last = fi;
-                t.last_box = boxes[bi];
             }
         }
-        for (bi, b) in boxes.iter().enumerate() {
-            if !used[bi] {
+        pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        let mut used_t = vec![false; open.len()];
+        let mut used_b = vec![false; boxes.len()];
+        for (_, ti, bi) in pairs {
+            if used_t[ti] || used_b[bi] {
+                continue;
+            }
+            used_t[ti] = true;
+            used_b[bi] = true;
+            let (b, bcol) = boxes[bi];
+            let t = &mut open[ti];
+            t.boxes.push((fi, b));
+            t.last = fi;
+            t.last_box = b;
+            for k in 0..3 {
+                t.color[k] = 0.85 * t.color[k] + 0.15 * bcol[k] as f64;
+            }
+        }
+        for (bi, (b, bcol)) in boxes.iter().enumerate() {
+            if !used_b[bi] {
                 open.push(Open {
                     boxes: vec![(fi, *b)],
                     last: fi,
                     last_box: *b,
+                    color: [bcol[0] as f64, bcol[1] as f64, bcol[2] as f64],
                 });
             }
         }
-        // Close stale tracks.
         open.retain(|t| {
             if fi - t.last > max_gap {
                 closed.push(ActorTrack {
                     kind: ActorKind::Unknown,
                     boxes: t.boxes.clone(),
+                    color: [
+                        t.color[0].round() as u8,
+                        t.color[1].round() as u8,
+                        t.color[2].round() as u8,
+                    ],
                     sprite: None,
                 });
                 false
@@ -1091,15 +1203,145 @@ pub fn track_actors(boxes_per_frame: &[Vec<Rect>], max_gap: usize) -> Vec<ActorT
         closed.push(ActorTrack {
             kind: ActorKind::Unknown,
             boxes: t.boxes,
+            color: [
+                t.color[0].round() as u8,
+                t.color[1].round() as u8,
+                t.color[2].round() as u8,
+            ],
             sprite: None,
         });
     }
-    // Drop unstable tracks, sort by length, keep top candidates, and classify.
-    closed.retain(|t| t.boxes.len() >= 8 && t.median_size() != (0, 0));
+
+    let scroll_is_trivial = scroll.iter().all(|s| s[0] == 0 && s[1] == 0);
+    let world_span = |t: &ActorTrack| -> (f64, f64) {
+        let mut min_x = f64::MAX;
+        let mut max_x = f64::MIN;
+        let mut min_y = f64::MAX;
+        let mut max_y = f64::MIN;
+        for &(fi, b) in &t.boxes {
+            let s = scroll.get(fi).copied().unwrap_or([0, 0]);
+            let wx = b.x0 as f64 + s[0] as f64;
+            let wy = b.y0 as f64 + s[1] as f64;
+            min_x = min_x.min(wx);
+            max_x = max_x.max(wx);
+            min_y = min_y.min(wy);
+            max_y = max_y.max(wy);
+        }
+        ((max_x - min_x).max(0.0), (max_y - min_y).max(0.0))
+    };
+
+    closed.retain(|t| {
+        if t.boxes.len() < 6 || t.median_size() == (0, 0) {
+            return false;
+        }
+        if is_static {
+            let (dx, dy) = world_span(t);
+            dx.max(dy) >= 12.0
+        } else {
+            t.boxes.len() >= 8
+        }
+    });
+
+    // Spinor-coherent fragment unification: merge non-overlapping track fragments
+    // sharing the same chromatic spinor signature and compatible size.
     closed.sort_by_key(|t| std::cmp::Reverse(t.boxes.len()));
-    closed.truncate(12);
-    classify_tracks(&mut closed);
-    closed
+    let all_moving = closed.clone();
+    let mut merged: Vec<ActorTrack> = Vec::new();
+    for t in closed {
+        let (tw, th) = t.median_size();
+        let mut placed = false;
+        for m in &mut merged {
+            if color_dist(t.color, m.color) > 35 {
+                continue;
+            }
+            let (mw, mh) = m.median_size();
+            if (tw - mw).abs() > 8 || (th - mh).abs() > 8 {
+                continue;
+            }
+            let overlaps = t
+                .boxes
+                .iter()
+                .any(|(fi, _)| m.boxes.iter().any(|(mfi, _)| mfi == fi));
+            if overlaps {
+                continue;
+            }
+            // In scrolling worlds, only merge fragments that are spatially and
+            // temporally proximate in world coordinates so separate actors stay distinct.
+            let can_merge = if is_static {
+                true
+            } else {
+                let (tfi, tb) = t.boxes.first().unwrap();
+                let ts = scroll.get(*tfi).copied().unwrap_or([0, 0]);
+                let tx = tb.center()[0] + ts[0] as f64;
+                let ty = tb.center()[1] + ts[1] as f64;
+                let (mfi, mb) = m.boxes.last().unwrap();
+                let ms = scroll.get(*mfi).copied().unwrap_or([0, 0]);
+                let mx = mb.center()[0] + ms[0] as f64;
+                let my = mb.center()[1] + ms[1] as f64;
+                (tx - mx).abs() <= 96.0 && (ty - my).abs() <= 28.0
+            };
+            if can_merge {
+                m.boxes.extend(t.boxes.clone());
+                m.boxes.sort_by_key(|(fi, _)| *fi);
+                placed = true;
+                break;
+            }
+        }
+        if !placed {
+            merged.push(t);
+        }
+    }
+
+    // Filter out stationary shimmering lattice sites (world excursion < 20 px)
+    // after fragment unification.
+    merged.retain(|t| {
+        if t.boxes.len() < 8 {
+            return false;
+        }
+        if !is_static && scroll_is_trivial {
+            return true;
+        }
+        let (dx, dy) = world_span(t);
+        dx.max(dy) >= if is_static { 12.0 } else { 20.0 }
+    });
+    merged.sort_by_key(|t| std::cmp::Reverse(t.boxes.len()));
+    if is_static && !merged.is_empty() {
+        let (pw, ph) = merged[0].median_size();
+        let primary_area = (pw * ph).max(1);
+        let primary_len = merged[0].boxes.len();
+        merged.retain(|t| {
+            let (w, h) = t.median_size();
+            !(w * h > primary_area * 3 / 2 && t.boxes.len() * 3 < primary_len)
+        });
+    }
+    merged.truncate(12);
+    classify_tracks(&mut merged);
+    if !is_static && !scroll_is_trivial {
+        for t in &mut merged {
+            let (dx, _) = world_span(t);
+            let mut vx_sum = 0.0f64;
+            let mut v_cnt = 0usize;
+            for pair in t.boxes.windows(2) {
+                let dt = pair[1].0.saturating_sub(pair[0].0).max(1) as f64;
+                if dt <= 5.0 {
+                    let s0 = scroll.get(pair[0].0).copied().unwrap_or([0, 0]);
+                    let s1 = scroll.get(pair[1].0).copied().unwrap_or([0, 0]);
+                    let wx0 = pair[0].1.x0 as f64 + s0[0] as f64;
+                    let wx1 = pair[1].1.x0 as f64 + s1[0] as f64;
+                    let vx = (wx1 - wx0) / dt;
+                    if vx.abs() <= 16.0 {
+                        vx_sum += vx;
+                        v_cnt += 1;
+                    }
+                }
+            }
+            let mean_vx = if v_cnt > 0 { vx_sum / v_cnt as f64 } else { 0.0 };
+            if dx >= 150.0 && mean_vx >= 1.2 {
+                t.kind = ActorKind::Player;
+            }
+        }
+    }
+    (merged, all_moving)
 }
 
 /// In any side-scroller, the player is the persistent actor across the gameplay
@@ -1242,6 +1484,8 @@ pub struct TileExtraction {
     pub solids: Vec<Rect>,
     /// Rectangle components that produced a one-way surface.
     pub boxes: Vec<Rect>,
+    /// Isolated sub-tile collectible excitations in world pixels.
+    pub collectibles: Vec<Rect>,
     /// World y of the level's low ground line.
     pub ground_top: i32,
     /// World y of the top edge of tile row 0 (the detected lattice origin).
@@ -1290,6 +1534,7 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
             platforms: Vec::new(),
             solids: Vec::new(),
             boxes: Vec::new(),
+            collectibles: Vec::new(),
             ground_top: 0,
             origin_y: 0,
             background: [0, 0, 0],
@@ -1309,6 +1554,70 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
         let rows = h / ts;
         let mut kinds = vec![TileKind::Empty; cols * rows];
         let mut solids = Vec::new();
+        let mut collectibles = Vec::new();
+
+        // Topologically separate extended structural boundaries (span >= 2 * ts)
+        // from isolated corridor collectible excitations (span <= ts + 4) via
+        // 8-connected components of non-background pixels inside the playfield band.
+        let y_min = opts.hud_bottom.min(h);
+        let y_max = opts.hud_top.min(h);
+        let mut visited = vec![false; w * h];
+        let mut wall_mask = vec![false; w * h];
+        let mut queue = Vec::new();
+        for y in y_min..y_max {
+            for x in 0..w {
+                let start_idx = y * w + x;
+                if !nonbg[start_idx] || visited[start_idx] {
+                    continue;
+                }
+                visited[start_idx] = true;
+                queue.clear();
+                queue.push((x, y));
+                let mut head = 0usize;
+                let mut min_x = x as i32;
+                let mut max_x = x as i32;
+                let mut min_y = y as i32;
+                let mut max_y = y as i32;
+                while head < queue.len() {
+                    let (cx, cy) = queue[head];
+                    head += 1;
+                    min_x = min_x.min(cx as i32);
+                    max_x = max_x.max(cx as i32);
+                    min_y = min_y.min(cy as i32);
+                    max_y = max_y.max(cy as i32);
+                    for dy in -1i32..=1 {
+                        for dx in -1i32..=1 {
+                            if dx == 0 && dy == 0 {
+                                continue;
+                            }
+                            let nx = cx as i32 + dx;
+                            let ny = cy as i32 + dy;
+                            if nx >= 0
+                                && (nx as usize) < w
+                                && ny >= y_min as i32
+                                && (ny as usize) < y_max
+                            {
+                                let nidx = ny as usize * w + nx as usize;
+                                if nonbg[nidx] && !visited[nidx] {
+                                    visited[nidx] = true;
+                                    queue.push((nx as usize, ny as usize));
+                                }
+                            }
+                        }
+                    }
+                }
+                let bw = max_x - min_x + 1;
+                let bh = max_y - min_y + 1;
+                let span = bw.max(bh);
+                if span >= (2 * ts) as i32 {
+                    for &(px, py) in &queue {
+                        wall_mask[py * w + px] = true;
+                    }
+                } else if span <= (ts + 4) as i32 {
+                    collectibles.push(Rect::new(min_x, min_y, max_x, max_y));
+                }
+            }
+        }
 
         for ty in 0..rows {
             let y0 = ty * ts;
@@ -1327,7 +1636,7 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
                 let mut wall_pixels = 0usize;
                 for y in y0..y1 {
                     for x in x0..x1 {
-                        if nonbg[y * w + x] {
+                        if wall_mask[y * w + x] {
                             wall_pixels += 1;
                         }
                     }
@@ -1349,6 +1658,7 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
             platforms: Vec::new(),
             solids,
             boxes: Vec::new(),
+            collectibles,
             ground_top: h as i32,
             origin_y: 0,
             background,
@@ -1765,6 +2075,7 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
         platforms,
         solids,
         boxes,
+        collectibles: Vec::new(),
         ground_top: if has_ground {
             origin_y + ground_row as i32 * TILE as i32
         } else {
@@ -1966,11 +2277,11 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
 
     // Pass 2: HUD mode + residual boxes vs the plain atlas.
     let mut reader = video_io::FrameReader::open_range(path, Some(start), Some(duration))?;
-    let mut boxes_per_frame: Vec<Vec<Rect>> = Vec::with_capacity(n_frames);
+    let mut boxes_per_frame: Vec<Vec<(Rect, [u8; 3])>> = Vec::with_capacity(n_frames);
     let mut refined: Vec<[i32; 2]> = Vec::with_capacity(n_frames);
     let mut hud_acc: HashMap<(i32, i32), Bucket> = HashMap::new();
     let mut idx = 0usize;
-    let actor_min_area = if is_static { 40 } else { ACTOR_MIN_AREA };
+    let actor_min_area = if is_static { 35 } else { ACTOR_MIN_AREA };
     while let Some(frame) = reader.next_frame()? {
         if idx >= n_frames {
             break;
@@ -1981,10 +2292,11 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
             refine_offset(&plain_atlas, &frame, scroll[idx], hud_top)
         };
         refined.push(off);
-        let mut boxes = residual_boxes_range(&plain_atlas, &frame, off, hud_bottom, hud_top, 42, 40);
+        let mut boxes =
+            residual_boxes_with_color(&plain_atlas, &frame, off, hud_bottom, hud_top, 42, 35);
         // Sprite-scale prior: actors are at most two tiles across. Larger
         // residuals are parallax layers (clouds), decorations or seams.
-        boxes.retain(|b| {
+        boxes.retain(|(b, _)| {
             b.width() <= ACTOR_MAX_PX && b.height() <= ACTOR_MAX_PX && b.area() >= actor_min_area
         });
         boxes_per_frame.push(boxes);
@@ -2014,8 +2326,22 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         }
     }
 
-    // Tracks.
-    let mut tracks = track_actors(&boxes_per_frame, 12);
+    // Tracks (spinor-coherent matching + fragment unification).
+    let (mut tracks, all_moving) = track_actors_coherent(
+        &boxes_per_frame,
+        &refined,
+        info.width as usize,
+        is_static,
+        15,
+    );
+    let mut moving_at_frame: Vec<Vec<Rect>> = vec![Vec::new(); n_frames];
+    for t in &all_moving {
+        for &(fi, b) in &t.boxes {
+            if fi < n_frames {
+                moving_at_frame[fi].push(b);
+            }
+        }
+    }
 
     // Pass 3: masked atlas + sprites.
     let mut reader = video_io::FrameReader::open_range(path, Some(start), Some(duration))?;
@@ -2059,10 +2385,15 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
             break;
         }
         let off = refined[idx];
-        let masked: Vec<Rect> = boxes_per_frame[idx]
+        let mut masked: Vec<Rect> = moving_at_frame[idx]
             .iter()
-            .map(|b| b.expand(2)) // 2px margin ensures no actor edge bleeds into the mode atlas.
+            .map(|b| b.expand(2))
             .collect();
+        for (b, _) in &boxes_per_frame[idx] {
+            if !is_static || b.width().max(b.height()) >= 14 {
+                masked.push(b.expand(2));
+            }
+        }
         acc2.add_frame(&frame, off, &masked);
         for (ti, b) in &track_at_frame[idx] {
             let Some(sa) = sprite_accs[*ti].as_mut() else {

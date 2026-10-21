@@ -1,5 +1,5 @@
 # From Video & Text to Playable Implicate Worlds
-### Ontology and Mathematics of the Clifford World Compiler (`cliffordcore`)
+### Ontology and Mathematics of the Clifford World Compiler (`HolonEngine`)
 
 ---
 

@@ -39,6 +39,15 @@ pub struct TrackRecord {
     pub size: [i32; 2],
     #[serde(default)]
     pub spawn: [i32; 2],
+    /// Observed world-space bounding excursion `[dx_world, dy_world]`.
+    #[serde(default)]
+    pub span: [i32; 2],
+    /// Characteristic world-space velocity `[vx, vy]` (px/frame).
+    #[serde(default)]
+    pub velocity: [f32; 2],
+    /// Intrinsic chromatic spinor signature (RGB).
+    #[serde(default)]
+    pub color: [u8; 3],
     /// Recorded `(frame_index, x, y)` positions.
     #[serde(default)]
     pub trajectory: Vec<[i32; 3]>,
@@ -64,6 +73,9 @@ pub struct ModelManifest {
     pub origin_y: i32,
     pub ground_top: i32,
     pub background: [u8; 3],
+    /// Inferred vertical gravity acceleration (px/frame^2); 0.0 for planar worlds.
+    #[serde(default)]
+    pub gravity: f32,
     pub cols: u32,
     pub rows: u32,
     /// `TileKind` bytes, row-major.
@@ -74,6 +86,9 @@ pub struct ModelManifest {
     pub platforms: Vec<[i32; 4]>,
     /// Solid tile runs, world pixels: `[x0, y0, x1, y1]`.
     pub solids: Vec<[i32; 4]>,
+    /// Isolated collectible excitations, world pixels: `[x0, y0, x1, y1]`.
+    #[serde(default)]
+    pub collectibles: Vec<[i32; 4]>,
     pub sprites: Vec<SpriteRecord>,
     pub tracks: Vec<TrackRecord>,
 }
@@ -167,15 +182,49 @@ impl Model2D {
                     [*fi as i32, b.x0 + s[0], b.y0 + s[1]]
                 })
                 .collect();
+            let span = if trajectory.is_empty() {
+                [0, 0]
+            } else {
+                let min_x = trajectory.iter().map(|p| p[1]).min().unwrap_or(0);
+                let max_x = trajectory.iter().map(|p| p[1]).max().unwrap_or(0);
+                let min_y = trajectory.iter().map(|p| p[2]).min().unwrap_or(0);
+                let max_y = trajectory.iter().map(|p| p[2]).max().unwrap_or(0);
+                [max_x - min_x, max_y - min_y]
+            };
+            let mut vx_sum = 0.0f32;
+            let mut vy_sum = 0.0f32;
+            let mut v_cnt = 0usize;
+            for w_pair in trajectory.windows(2) {
+                let dt = (w_pair[1][0] - w_pair[0][0]).max(1) as f32;
+                if dt <= 5.0 {
+                    let vx = (w_pair[1][1] - w_pair[0][1]) as f32 / dt;
+                    let vy = (w_pair[1][2] - w_pair[0][2]) as f32 / dt;
+                    if vx.abs() <= 16.0 && vy.abs() <= 16.0 {
+                        vx_sum += vx;
+                        vy_sum += vy;
+                        v_cnt += 1;
+                    }
+                }
+            }
+            let velocity = if v_cnt > 0 {
+                [vx_sum / v_cnt as f32, vy_sum / v_cnt as f32]
+            } else {
+                [-0.5, 0.0]
+            };
             tracks.push(TrackRecord {
                 kind: t.kind.as_str().to_string(),
                 frames: t.boxes.len() as u32,
                 size: [w, h],
                 spawn,
+                span,
+                velocity,
+                color: t.color,
                 trajectory,
                 sprite,
             });
         }
+        let has_ground_plane = level.tiles.ground_top < level.atlas.image.height as i32;
+        let gravity = if has_ground_plane { 0.48 } else { 0.0 };
         let manifest = ModelManifest {
             version: VERSION,
             source: source.to_string(),
@@ -193,12 +242,14 @@ impl Model2D {
             origin_y: level.tiles.origin_y,
             ground_top: level.tiles.ground_top,
             background: level.tiles.background,
+            gravity,
             cols: level.tiles.cols as u32,
             rows: level.tiles.rows as u32,
             kinds: level.tiles.kinds.iter().map(|k| k.as_u8()).collect(),
             scroll: level.scroll.clone(),
             platforms: level.tiles.platforms.iter().map(rect4).collect(),
             solids: level.tiles.solids.iter().map(rect4).collect(),
+            collectibles: level.tiles.collectibles.iter().map(rect4).collect(),
             sprites: records,
             tracks,
         };
@@ -359,6 +410,100 @@ impl Model2D {
         }
         self.row_y(ty)
     }
+
+    /// Tile-free continuous world-space solid check: returns the containing solid
+    /// boundary rect `[x0, y0, x1, y1]` if world coordinate `(wx, wy)` lies inside
+    /// any solid region.
+    pub fn solid_at_world(&self, wx: f32, wy: f32) -> Option<[i32; 4]> {
+        let x = wx.floor() as i32;
+        let y = wy.floor() as i32;
+        self.manifest
+            .solids
+            .iter()
+            .copied()
+            .find(|r| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3])
+    }
+
+    /// Tile-free continuous world-space one-way boundary check: returns the
+    /// containing platform rect `[x0, y0, x1, y1]` if `(wx, wy)` lies inside it.
+    pub fn one_way_at_world(&self, wx: f32, wy: f32) -> Option<[i32; 4]> {
+        let x = wx.floor() as i32;
+        let y = wy.floor() as i32;
+        self.manifest
+            .platforms
+            .iter()
+            .copied()
+            .find(|r| x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3])
+    }
+
+    /// Tile-free continuous check whether the world space immediately below a
+    /// boundary rect `r = [x0, y0, x1, y1]` is open backdrop (e.g. a floating
+    /// interactive block vs. a grounded shelf or pipe top).
+    pub fn is_open_below_rect(&self, r: [i32; 4]) -> bool {
+        if self.atlas.width == 0 || self.atlas.height == 0 {
+            return false;
+        }
+        let y_check = ((r[3] + 4).max(0) as usize).min(self.atlas.height - 1);
+        let x_start = r[0].max(0) as usize;
+        let x_end = (r[2].max(0) as usize).min(self.atlas.width - 1);
+        if x_start > x_end {
+            return false;
+        }
+        let bg = self.manifest.background;
+        let mut open_px = 0usize;
+        let mut total = 0usize;
+        for x in (x_start..=x_end).step_by(2) {
+            let c = self.atlas.pixel(x, y_check);
+            let dist = (c[0] as i32 - bg[0] as i32)
+                .abs()
+                .max((c[1] as i32 - bg[1] as i32).abs())
+                .max((c[2] as i32 - bg[2] as i32).abs());
+            if dist <= 28 {
+                open_px += 1;
+            }
+            total += 1;
+        }
+        total > 0 && (open_px as f64 / total as f64) >= 0.6
+    }
+
+    /// Build the continuous Clifford Quantum Potential field $\mathcal{Q}_{\text{Cl}} = -(\nabla^2 R)/R$
+    /// directly from continuous world-space geometry (`solids`, `platforms`, `collectibles`)
+    /// without requiring a tile grid (`kinds` may be empty).
+    pub fn build_continuous_qfield(&self, n: usize) -> crate::potential::QField {
+        let n = n.max(16);
+        let mut aw = (self.atlas.width.max(self.manifest.atlas[0] as usize)).max(1) as f64;
+        let mut ah = (self.atlas.height.max(self.manifest.atlas[1] as usize)).max(1) as f64;
+        for r in self
+            .manifest
+            .solids
+            .iter()
+            .chain(&self.manifest.platforms)
+            .chain(&self.manifest.collectibles)
+        {
+            aw = aw.max((r[2] + 1) as f64);
+            ah = ah.max((r[3] + 1) as f64);
+        }
+        let mut amp = vec![1.0f64; n * n];
+        for iy in 0..n {
+            let wy = ((iy as f64 + 0.5) / n as f64) * ah;
+            for ix in 0..n {
+                let wx = ((ix as f64 + 0.5) / n as f64) * aw;
+                if self.solid_at_world(wx as f32, wy as f32).is_some() {
+                    amp[iy * n + ix] = 0.08;
+                } else if self.one_way_at_world(wx as f32, wy as f32).is_some() {
+                    amp[iy * n + ix] = 0.6;
+                }
+            }
+        }
+        for c in &self.manifest.collectibles {
+            let cx = ((c[0] + c[2]) as f64 * 0.5 / aw * n as f64).floor() as usize;
+            let cy = ((c[1] + c[3]) as f64 * 0.5 / ah * n as f64).floor() as usize;
+            if cx < n && cy < n {
+                amp[cy * n + cx] = (amp[cy * n + cx] + 0.25).min(1.5);
+            }
+        }
+        crate::potential::QField::from_amplitude(n, 1.0 / n as f64, &amp, 0.05)
+    }
 }
 
 fn read_u32(cur: &mut Cursor<&[u8]>) -> io::Result<u32> {
@@ -395,12 +540,14 @@ mod tests {
                 origin_y: 1,
                 ground_top: 4,
                 background: [1, 2, 3],
+                gravity: 0.0,
                 cols: 1,
                 rows: 1,
                 kinds: vec![TileKind::Solid.as_u8()],
                 scroll: vec![[0, 0], [1, 0]],
                 platforms: vec![[0, 0, 3, 0]],
                 solids: vec![[0, 4, 3, 7]],
+                collectibles: Vec::new(),
                 sprites: vec![SpriteRecord {
                     kind: "player".into(),
                     width: 2,
@@ -412,6 +559,9 @@ mod tests {
                     frames: 2,
                     size: [2, 2],
                     spawn: [0, 0],
+                    span: [0, 0],
+                    velocity: [0.0, 0.0],
+                    color: [255, 0, 0],
                     trajectory: Vec::new(),
                     sprite: Some(0),
                 }],
@@ -452,5 +602,27 @@ mod tests {
         assert_eq!(m.surface_y(0), 1);
         assert_eq!(m.kind(0, 0), TileKind::Solid);
         assert_eq!(m.kind(5, 5), TileKind::Empty);
+    }
+
+    #[test]
+    fn tile_free_continuous_world_queries_and_qfield() {
+        let mut m = sample();
+        // Strip all tile-grid metadata to simulate a completely tile-free 2D game
+        m.manifest.tile = 0;
+        m.manifest.cols = 0;
+        m.manifest.rows = 0;
+        m.manifest.kinds.clear();
+        m.manifest.solids = vec![[10, 40, 90, 55]];
+        m.manifest.platforms = vec![[20, 15, 60, 22]];
+        m.manifest.collectibles = vec![[30, 30, 34, 34]];
+
+        assert_eq!(m.solid_at_world(25.5, 45.0), Some([10, 40, 90, 55]));
+        assert_eq!(m.solid_at_world(5.0, 45.0), None);
+        assert_eq!(m.one_way_at_world(40.0, 18.0), Some([20, 15, 60, 22]));
+        assert_eq!(m.one_way_at_world(40.0, 30.0), None);
+
+        let qf = m.build_continuous_qfield(32);
+        let (lo, hi) = qf.range();
+        assert!(hi > lo, "continuous Q_Cl field should have non-trivial potential relief");
     }
 }

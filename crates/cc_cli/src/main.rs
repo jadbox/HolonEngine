@@ -1,4 +1,4 @@
-//! `cc` — cliffordcore model compiler and 2D runtime.
+//! `cc` — HolonEngine model compiler and 2D runtime.
 //!
 //! ```sh
 //! cc enfold example_input2d/smb3_w1_1_256x240.mp4 -o /tmp/opencode/smb3.cc
@@ -157,17 +157,18 @@ fn cmd_inspect(args: &[String]) -> io::Result<()> {
         m.atlas[0], m.atlas[1], m.origin, m.tile, m.cols, m.rows
     );
     println!(
-        "level   viewport {}x{}, hud_top {}, ground_top y={}, backdrop {:?}",
-        m.viewport[0], m.viewport[1], m.hud_top, m.ground_top, m.background
+        "level   viewport {}x{}, hud_top {}, ground_top y={}, gravity {:.2}, backdrop {:?}",
+        m.viewport[0], m.viewport[1], m.hud_top, m.ground_top, m.gravity, m.background
     );
     println!(
         "tiles   empty={} solid={} oneway={} background={}",
         counts[0], counts[1], counts[2], counts[3]
     );
     println!(
-        "collide {} solid runs, {} one-way surfaces",
+        "collide {} solid runs, {} one-way surfaces, {} collectibles",
         m.solids.len(),
-        m.platforms.len()
+        m.platforms.len(),
+        m.collectibles.len()
     );
     println!("frames  {} scroll samples", m.scroll.len());
     println!(
@@ -178,7 +179,7 @@ fn cmd_inspect(args: &[String]) -> io::Result<()> {
 
     // ASCII preview of the collision grid.
     let max_cols = m.cols.min(96) as usize;
-    let max_rows = m.rows.min(24) as usize;
+    let max_rows = m.rows.min(40) as usize;
     for ty in 0..max_rows {
         let mut line = String::with_capacity(max_cols);
         for tx in 0..max_cols {
@@ -207,6 +208,7 @@ fn cmd_inspect(args: &[String]) -> io::Result<()> {
     if let Some(p) = opt(args, "--tiles") {
         // Overlay tile classes on top of the atlas.
         let mut img = model.atlas.clone();
+        let ts = (m.tile as usize).max(4);
         let palette = [
             [0, 0, 0],
             [255, 40, 40],
@@ -216,8 +218,8 @@ fn cmd_inspect(args: &[String]) -> io::Result<()> {
         for ty in 0..m.rows as usize {
             for tx in 0..m.cols as usize {
                 let k = model.kind(tx, ty) as usize;
-                let y0 = (m.origin_y + (ty * TILE) as i32).max(0) as usize;
-                for x in tx * TILE..((tx + 1) * TILE).min(img.width) {
+                let y0 = (m.origin_y + (ty * ts) as i32).max(0) as usize;
+                for x in tx * ts..((tx + 1) * ts).min(img.width) {
                     for y in y0..(y0 + 2).min(img.height) {
                         img.set_pixel(x, y, palette[k]);
                     }
@@ -357,21 +359,20 @@ impl Player {
 
 /// An autonomous entity in the 2D world model.
 ///
-/// Behaviors are modeled on high-level geometric invariants and Clifford
-/// state idempotents (Bohm-Hiley process ontology) rather than game-specific
-/// branching:
-/// - State 0: Heading negative along primary axis (e.g. leftward patrol)
-/// - State 1: Heading positive along primary axis (e.g. rightward patrol)
-/// - State 2: Post-impact / passive state (e.g. squashed, recoiled)
+/// Behaviors are governed by Hiley's `CliffordDensityElement`
+/// ($\rho_c = \Phi_L \widetilde{\Phi}_L = \rho U \epsilon_s \widetilde{U}$) and the
+/// kinematic excursion invariants learned during `enfold`:
+/// - State 0 ($\epsilon_0$): Active forward/outbound branch
+/// - State 1 ($\epsilon_1$): Reflected return branch
+/// - State 2 ($\epsilon_2$): Post-impact / collapsed branch ($\rho \to 0$)
 struct ActorHolon {
     x: f32,
     y: f32,
-    spawn_y: f32,
-    vx: f32,
     w: f32,
     h: f32,
-    state: u32,
-    is_vertical: bool,
+    speed: f64,
+    bounds_y: [f32; 2],
+    cde: cc_math::CliffordDensityElement,
     sprite: Option<image::RgbaImage>,
 }
 
@@ -404,7 +405,7 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
     };
     let model = Model2D::load(Path::new(path))?;
     let m = &model.manifest;
-    let is_static = m.scroll.iter().all(|s| s[0] == 0 && s[1] == 0);
+    let is_static = m.gravity <= 0.0 && m.scroll.iter().all(|s| s[0] == 0 && s[1] == 0);
     let frames: usize = opt(args, "--frames")
         .and_then(|s| s.parse().ok())
         .unwrap_or_else(|| if is_static { m.scroll.len() } else { 600 });
@@ -427,65 +428,114 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
     };
 
     if is_static {
+        struct PlanarHolon {
+            pos: Option<(f64, f64)>,
+            size: [f64; 2],
+            cde: cc_math::CliffordDensityElement,
+            trajectory: std::collections::HashMap<usize, (i32, i32)>,
+            sprite: Option<image::RgbaImage>,
+        }
+
+        // Build the continuous Clifford Quantum Potential field Q_Cl = -(∇²R)/R
+        // directly from world-space geometry (`solids`, `platforms`, `collectibles`),
+        // requiring zero tile-grid assumptions.
+        let qfield = model.build_continuous_qfield(64);
+        let basis = cc_math::StateBasis::new(3);
+
         let mut atlas_copy = model.atlas.rgb.clone();
-        let track_positions: Vec<std::collections::HashMap<usize, (i32, i32)>> = m
+        let mut collectibles: Vec<([i32; 4], bool)> =
+            m.collectibles.iter().map(|&r| (r, true)).collect();
+        let mut holons: Vec<PlanarHolon> = m
             .tracks
             .iter()
             .map(|t| {
-                t.trajectory
+                let trajectory: std::collections::HashMap<usize, (i32, i32)> = t
+                    .trajectory
                     .iter()
                     .map(|p| (p[0] as usize, (p[1], p[2])))
-                    .collect()
-            })
-            .collect();
-        let track_sprites: Vec<Option<image::RgbaImage>> = m
-            .tracks
-            .iter()
-            .map(|t| {
-                t.sprite
+                    .collect();
+                let sprite = t
+                    .sprite
                     .and_then(|si| model.sprites.get(si as usize))
                     .and_then(|bytes| {
                         image::load_from_memory_with_format(bytes, image::ImageFormat::Png).ok()
                     })
-                    .map(|img| img.to_rgba8())
+                    .map(|img| img.to_rgba8());
+                PlanarHolon {
+                    pos: None,
+                    size: [t.size[0].max(8) as f64, t.size[1].max(8) as f64],
+                    cde: cc_math::CliffordDensityElement::new(1.0, 0.0, 0, 3, t.color),
+                    trajectory,
+                    sprite,
+                }
             })
             .collect();
 
-        let mut last_positions: Vec<Option<(i32, i32)>> = vec![None; m.tracks.len()];
-        let mut dots_eaten = 0usize;
+        let bg = m.background;
+        let mut absorbed = 0usize;
         let t0 = Instant::now();
         let mut captured = 0usize;
 
         for frame in 0..frames {
-            // Update track positions for this frame
-            for (ti, map) in track_positions.iter().enumerate() {
-                if let Some(&pos) = map.get(&frame) {
-                    last_positions[ti] = Some(pos);
+            for h in &mut holons {
+                if let Some(&(tx, ty)) = h.trajectory.get(&frame) {
+                    if let Some((px, py)) = h.pos {
+                        let dx = tx as f64 - px;
+                        let dy = ty as f64 - py;
+                        if dx * dx + dy * dy > 0.25 && dx.abs() < (aw as f64 * 0.5) {
+                            h.cde.set_heading_angle(dy.atan2(dx));
+                        }
+                    }
+                    h.pos = Some((tx as f64, ty as f64));
+                } else if let Some((px, py)) = h.pos {
+                    // Unfold across trajectory gaps using Q_Cl quantum torque + Bohm momentum.
+                    let ux = (px / aw.max(1) as f64).clamp(0.0, 1.0);
+                    let uy = (py / ah.max(1) as f64).clamp(0.0, 1.0);
+                    let [gx, gy] = qfield.gradient_at(ux, uy);
+                    h.cde.apply_quantum_torque([-gx * 0.001, -gy * 0.001], 0.2);
+                    let [vx, vy] = h.cde.bohm_momentum(1.0);
+                    let nx = (px + vx).rem_euclid(aw.max(1) as f64);
+                    let ny = (py + vy).clamp(0.0, (ah.saturating_sub(1)) as f64);
+                    let cx = (nx + h.size[0] * 0.5) as f32;
+                    let cy = (ny + h.size[1] * 0.5) as f32;
+                    if model.solid_at_world(cx, cy).is_none() {
+                        h.pos = Some((nx, ny));
+                    } else {
+                        let normal = if vx.abs() >= vy.abs() {
+                            [-vx.signum(), 0.0]
+                        } else {
+                            [0.0, -vy.signum()]
+                        };
+                        h.cde.reflect_at_boundary(normal, &basis);
+                    }
                 }
             }
 
-            // Pac-Man eating dots
-            if let Some((px, py)) = last_positions.first().and_then(|p| *p) {
-                let cx = px + 8;
-                let cy = py + 8;
-                for dy in -5..=5 {
-                    let y = cy + dy;
-                    if y < 0 || y >= ah as i32 {
-                        continue;
-                    }
-                    for dx in -5..=5 {
-                        let x = cx + dx;
-                        if x < 0 || x >= aw as i32 {
+            // Relational excitation absorption: when the primary holon intersects an
+            // active collectible excitation, transition the collectible to its spent state
+            // and clear its bounding box to the learned world background.
+            if let Some(primary) = holons.first() {
+                if let Some((px, py)) = primary.pos {
+                    let pcx = px + primary.size[0] * 0.5;
+                    let pcy = py + primary.size[1] * 0.5;
+                    for (rect, active) in &mut collectibles {
+                        if !*active {
                             continue;
                         }
-                        if dx * dx + dy * dy <= 20 {
-                            let idx = (y as usize * aw + x as usize) * 3;
-                            let c = [atlas_copy[idx], atlas_copy[idx + 1], atlas_copy[idx + 2]];
-                            if c[0] > 100 && c[2] < 200 {
-                                atlas_copy[idx] = 0;
-                                atlas_copy[idx + 1] = 0;
-                                atlas_copy[idx + 2] = 0;
-                                dots_eaten += 1;
+                        let cx = (rect[0] + rect[2]) as f64 * 0.5;
+                        let cy = (rect[1] + rect[3]) as f64 * 0.5;
+                        let dx = pcx - cx;
+                        let dy = pcy - cy;
+                        if dx * dx + dy * dy <= 49.0 {
+                            *active = false;
+                            absorbed += 1;
+                            for y in (rect[1] - 1).max(0)..=(rect[3] + 1).min(ah as i32 - 1) {
+                                for x in (rect[0] - 1).max(0)..=(rect[2] + 1).min(aw as i32 - 1) {
+                                    let idx = (y as usize * aw + x as usize) * 3;
+                                    atlas_copy[idx] = bg[0];
+                                    atlas_copy[idx + 1] = bg[1];
+                                    atlas_copy[idx + 2] = bg[2];
+                                }
                             }
                         }
                     }
@@ -516,22 +566,27 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                         buf[i + 1] = atlas_copy[s + 1];
                         buf[i + 2] = atlas_copy[s + 2];
                     } else {
-                        buf[i] = 0;
-                        buf[i + 1] = 0;
-                        buf[i + 2] = 0;
+                        buf[i] = bg[0];
+                        buf[i + 1] = bg[1];
+                        buf[i + 2] = bg[2];
                     }
                 }
             }
 
-            // Render actors (ghosts first, then player)
-            let order = (1..m.tracks.len()).chain(std::iter::once(0));
+            // Render holons (autonomous actors first, then primary holon)
+            let order = (1..holons.len()).chain(std::iter::once(0));
             for ti in order {
-                let Some(sprite) = &track_sprites[ti] else {
+                let Some(h) = holons.get(ti) else {
                     continue;
                 };
-                let Some((ax, ay)) = last_positions[ti] else {
+                let Some(sprite) = &h.sprite else {
                     continue;
                 };
+                let Some((fx, fy)) = h.pos else {
+                    continue;
+                };
+                let ax = fx.round() as i32;
+                let ay = fy.round() as i32;
                 let sw = sprite.width() as i32;
                 let sh = sprite.height() as i32;
                 for sy in 0..sh {
@@ -575,12 +630,15 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
             w.finish()?;
         }
         println!(
-            "unfolded {frames} frames in {:.3}s ({:.0} Hz, static arena)",
+            "unfolded {frames} frames in {:.3}s ({:.0} Hz, planar Q_Cl arena)",
             secs,
             frames as f64 / secs.max(1e-9)
         );
-        if let Some((px, py)) = last_positions.first().and_then(|p| *p) {
-            println!("player ended at x={px} y={py} (world), dots_eaten={dots_eaten}");
+        if let Some((px, py)) = holons.first().and_then(|h| h.pos) {
+            println!(
+                "player ended at x={:.0} y={:.0} (world), collectibles_absorbed={absorbed}",
+                px, py
+            );
         }
         if let Some(dir) = &capture {
             println!("captured {captured} frames -> {}", dir.display());
@@ -609,7 +667,8 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                 .map(|img| img.to_rgba8())
         });
 
-    // Instantiate autonomous actor holons from all non-player tracks.
+    // Instantiate autonomous actor holons from all non-player tracks using their
+    // learned world-space excursion tensor `t.span` to orient the initial spinor rotor.
     let mut actors: Vec<ActorHolon> = model
         .manifest
         .tracks
@@ -622,17 +681,25 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                     .ok()
                     .map(|img| img.to_rgba8())
             });
-            // If track is tall and narrow (e.g. >= 30 px tall, <= 22 px wide), it is vertically anchored (e.g. plant in tube)
-            let is_vertical = t.size[1] >= 30 && t.size[0] <= 22;
+            // Principal mobility axis from observed world-space excursion [dx, dy]:
+            // if dy > 2 * dx, the process oscillates along e2 (-π/2); otherwise along e1 (π).
+            let vertical_mode = t.span[1] > 2 * t.span[0].max(1);
+            let theta0 = if vertical_mode {
+                -std::f64::consts::FRAC_PI_2
+            } else {
+                std::f64::consts::PI
+            };
+            let cde = cc_math::CliffordDensityElement::new(1.0, theta0, 0, 3, t.color);
+            let spawn_y = t.spawn[1] as f32;
+            let amp_y = (t.span[1].max(16)) as f32;
             ActorHolon {
                 x: t.spawn[0] as f32,
-                y: t.spawn[1] as f32,
-                spawn_y: t.spawn[1] as f32,
-                vx: if is_vertical { 0.0 } else { -0.5 },
+                y: spawn_y,
                 w: t.size[0] as f32,
                 h: t.size[1] as f32,
-                state: 0,
-                is_vertical,
+                speed: if vertical_mode { 0.35 } else { 0.5 },
+                bounds_y: [spawn_y - amp_y, spawn_y],
+                cde,
                 sprite,
             }
         })
@@ -673,27 +740,41 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
         let foot_ty = ((player.y + PH + 2.0 - m.origin_y as f32) / TILE as f32).floor() as i32;
         let tx = (ahead / TILE as f32).floor() as i32;
         let wall = player.solid(&model, tx, foot_ty - 1);
-        // A one-way surface can sit a few tiles above the feet (pipe tops, boxes).
-        let platform = (1..=4).any(|k| player.one_way(&model, tx, foot_ty - k));
-        let gap = !player.solid(&model, tx, foot_ty) && !player.one_way(&model, tx, foot_ty);
-        // An actor is ahead on the path -> jump at parabolic distance to land on it.
-        let actor_ahead = actors.iter().any(|a| {
-            a.state != 2
-                && (a.x - (player.x + PW)) > 40.0
-                && (a.x - (player.x + PW)) < 62.0
-                && (a.y - (player.y + PH)).abs() < 24.0
+        // A one-way surface can sit a few tiles above the feet (pipe tops, ledges);
+        // skip unbumped floating blocks with empty space underneath so the player runs
+        // under them and triggers `under_coin_box` from below.
+        let platform = (1..=4).any(|k| {
+            player.one_way(&model, tx, foot_ty - k)
+                && !block_props
+                    .get(&(tx.max(0) as usize, (foot_ty - k).max(0) as usize))
+                    .map_or(false, |p| p.state == 0 && coins_collected == 0)
         });
-        // Jump directly under the first active coin box to hit it from below.
+        let gap = !player.solid(&model, tx, foot_ty) && !player.one_way(&model, tx, foot_ty);
+        let center_tx = ((player.x + PW / 2.0) / TILE as f32).floor() as usize;
         let under_coin_box = player.on_ground
             && coins_collected == 0
             && (1..=4).any(|k| {
                 foot_ty - k >= 0
                     && block_props
-                        .get(&(
-                            ((player.x + PW / 2.0) / TILE as f32).floor() as usize,
-                            (foot_ty - k) as usize,
-                        ))
+                        .get(&(center_tx, (foot_ty - k) as usize))
                         .map_or(false, |p| p.state == 0)
+            });
+        let approaching_coin_box = coins_collected == 0
+            && (1..=3).any(|dx| {
+                (1..=4).any(|k| {
+                    foot_ty - k >= 0
+                        && block_props
+                            .get(&(center_tx + dx, (foot_ty - k) as usize))
+                            .map_or(false, |p| p.state == 0)
+                })
+            });
+        // An actor is ahead on the path -> jump at parabolic distance to land on it.
+        let actor_ahead = !approaching_coin_box
+            && actors.iter().any(|a| {
+                a.cde.state() != 2
+                    && (a.x - (player.x + PW)) > 40.0
+                    && (a.x - (player.x + PW)) < 62.0
+                    && (a.y - (player.y + PH)).abs() < 24.0
             });
         let jump = player.on_ground
             && (wall || platform || actor_ahead || under_coin_box || (gap && frame % 3 == 0));
@@ -729,49 +810,42 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
         }
         coins.retain(|c| c.timer > 0);
 
-        // Clifford-guided patrol and relational incidence resolution.
+        // Clifford-guided Bohm momentum evolution and boundary reflection.
         let basis = cc_math::idempotent::StateBasis::new(3);
         let view_right = player.x + vw as f32;
         for a in &mut actors {
-            if a.state == 2 {
+            if a.cde.state() == 2 {
                 continue;
             }
-            if a.is_vertical {
-                // Vertical oscillation: rise from tube, pause, and retract
-                let period = 120.0f32;
-                let phase = (frame as f32 % period) / period;
-                let dist_to_player = (player.x - a.x).abs();
-                if phase < 0.4 && dist_to_player > 24.0 {
-                    a.y = a.spawn_y - 20.0;
-                } else if phase < 0.5 {
-                    let t = (phase - 0.4) / 0.1;
-                    a.y = a.spawn_y - 20.0 * (1.0 - t);
-                } else if phase < 0.9 {
-                    a.y = a.spawn_y;
-                } else {
-                    let t = (phase - 0.9) / 0.1;
-                    a.y = a.spawn_y - 20.0 * t;
+            let [vx_f64, vy_f64] = a.cde.bohm_momentum(a.speed);
+            if vy_f64.abs() > vx_f64.abs() {
+                // e2-oriented process: step vertically between learned excursion bounds
+                // and reflect rotor U -> N U ~N at upper/lower limits.
+                let vy = vy_f64 as f32;
+                if a.y >= a.bounds_y[1] - 1.0 && (player.x - a.x).abs() <= a.w * 1.25 {
+                    continue;
+                }
+                a.y = (a.y + vy).clamp(a.bounds_y[0], a.bounds_y[1]);
+                if a.y <= a.bounds_y[0] {
+                    a.cde.reflect_at_boundary([0.0, 1.0], &basis);
+                } else if a.y >= a.bounds_y[1] {
+                    a.cde.reflect_at_boundary([0.0, -1.0], &basis);
                 }
                 continue;
             }
             if a.x > view_right {
                 continue;
             }
-            a.x += a.vx;
-            let check_x = if a.vx > 0.0 { a.x + a.w + 1.0 } else { a.x - 1.0 };
-            let atx = (check_x / TILE as f32).floor() as i32;
-            let aty = ((a.y + a.h / 2.0 - m.origin_y as f32) / TILE as f32).floor() as i32;
-            if player.solid(&model, atx, aty) || player.one_way(&model, atx, aty) {
-                // Lateral boundary incidence: idempotent reversal transition T_{0->1} or T_{1->0}
-                if a.state == 0 {
-                    let _ = basis.get(1);
-                    a.state = 1;
-                    a.vx = 0.5;
-                } else {
-                    let _ = basis.get(0);
-                    a.state = 0;
-                    a.vx = -0.5;
-                }
+            let vx = vx_f64 as f32;
+            a.x += vx;
+            let check_x = if vx > 0.0 { a.x + a.w + 1.0 } else { a.x - 1.0 };
+            let check_y = a.y + a.h * 0.5;
+            if model.solid_at_world(check_x, check_y).is_some()
+                || model.one_way_at_world(check_x, check_y).is_some()
+            {
+                // Lateral boundary incidence: rotor reflection U -> N U ~N and idempotent transition T_{0<->1}
+                let normal = if vx > 0.0 { [-1.0, 0.0] } else { [1.0, 0.0] };
+                a.cde.reflect_at_boundary(normal, &basis);
             }
 
             // Top-down relational incidence: downward player motion onto the actor's top boundary
@@ -782,9 +856,9 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                 && (player.x + PW) > a.x
                 && player.x < (a.x + a.w)
             {
-                // Downward impact: collapse actor to post-impact state (State 2)
-                let _ = basis.get(2);
-                a.state = 2;
+                // Downward impact: collapse actor CDE to post-impact state (State 2, amplitude -> 0)
+                let _ = a.cde.transition_to(2, &basis);
+                a.cde.amplitude = 0.0;
                 player.vy = -JUMP * 0.75;
                 impacts += 1;
                 eprintln!(
@@ -978,16 +1052,18 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
             if let Some(sprite) = &a.sprite {
                 let sw = sprite.width() as i32;
                 let sh = sprite.height() as i32;
-                let render_h = if a.state == 2 { (sh / 2).max(1) } else { sh };
+                let state = a.cde.state();
+                let render_h = if state == 2 { (sh / 2).max(1) } else { sh };
                 let sy_off = (ay + a.h as i32) - render_h;
                 let sx_off = ax;
-                let walk_flip = !a.is_vertical && a.state != 2 && (frame / 8) % 2 == 1;
+                let [hx, hy] = a.cde.heading_vector();
+                let walk_flip = hx.abs() >= hy.abs() && state != 2 && (frame / 8) % 2 == 1;
                 for sy in 0..render_h {
                     let dy = sy_off + sy;
                     if dy < 0 || dy >= vh as i32 {
                         continue;
                     }
-                    let src_y = if a.state == 2 { sy * 2 } else { sy };
+                    let src_y = if state == 2 { sy * 2 } else { sy };
                     for sx in 0..sw {
                         let dx = sx_off + sx;
                         if dx < 0 || dx >= vw as i32 {
@@ -1007,7 +1083,7 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                         }
                     }
                 }
-            } else if a.state != 2 {
+            } else if a.cde.state() != 2 {
                 for y in ay.max(0)..(ay + a.h as i32).min(vh as i32) {
                     for x in ax.max(0)..(ax + a.w as i32).min(vw as i32) {
                         let i = (y as usize * vw + x as usize) * 3;
