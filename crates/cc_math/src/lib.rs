@@ -23,9 +23,11 @@ use clifford::specialized::projective::dim3;
 
 pub use dim3::{Line, Motor, Plane, Point};
 
+pub mod holon;
 pub mod idempotent;
 pub mod pga;
 
+pub use holon::CliffordDensityElement;
 pub use idempotent::{StateBasis, StateIdempotent, TransitionOperator};
 pub use pga::{
     Camera2D, OrientedLine2, RayHit, SegmentHit, integrate_2d_camera, integrate_3d_ego,
