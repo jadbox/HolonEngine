@@ -315,12 +315,13 @@ impl Player {
             }
             None
         } else {
-            let head_y = self.y;
+            let head_ext = 10.0f32;
+            let head_y = self.y - head_ext;
             let mut hit_prop: Option<usize> = None;
             let mut hit_bottom: Option<f32> = None;
             for sample_x in [self.x, self.x + PW * 0.5, self.x + PW - 1.0] {
                 if let Some(r) = m.solid_at_world(sample_x, head_y) {
-                    hit_bottom = Some((r[3] + 1) as f32);
+                    hit_bottom = Some((r[3] + 1) as f32 + head_ext);
                     break;
                 }
                 let sx = sample_x.floor() as i32;
@@ -329,7 +330,7 @@ impl Player {
                     sx >= p.rect[0] && sx <= p.rect[2] && sy >= p.rect[1] && sy <= p.rect[3]
                 }) {
                     hit_prop = Some(pi);
-                    hit_bottom = Some((p.rect[3] + 1) as f32);
+                    hit_bottom = Some((p.rect[3] + 1) as f32 + head_ext);
                     break;
                 }
             }
@@ -903,7 +904,7 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                 let bx = prop.rect[0] - cam_x as i32;
                 let by = prop.rect[1] - cam_y as i32;
                 let bw = (prop.rect[2] - prop.rect[0] + 1).max(1);
-                let bh = (prop.rect[3] - prop.rect[1] + 1).max(1);
+                let bh = (prop.rect[3] - prop.rect[1] + 2).max(1);
                 if bx + bw <= 0 || bx >= vw as i32 || by + bh <= 0 || by >= vh as i32 {
                     continue;
                 }

@@ -1941,7 +1941,7 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
                                 for tx in 0..cols {
                                     let tx0 = (tx * TILE) as i32;
                                     let tx1 = tx0 + TILE as i32 - 1;
-                                    if tx1 >= rx0 && tx0 <= rx1 {
+                                    if tx1.min(rx1) - tx0.max(rx0) + 1 >= 4 {
                                         kinds[ty * cols + tx] = TileKind::OneWay;
                                     }
                                 }
@@ -1999,7 +1999,7 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
             for tx in 0..cols {
                 let tx0 = (tx * TILE) as i32;
                 let tx1 = tx0 + TILE as i32 - 1;
-                if tx1 >= c.x0 && tx0 <= c.x1 {
+                if tx1.min(c.x1) - tx0.max(c.x0) + 1 >= 4 {
                     kinds[ty * cols + tx] = TileKind::OneWay;
                 }
             }
