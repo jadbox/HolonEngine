@@ -9,11 +9,9 @@ Conventional game engines hardcode per-game state machines (`if is_pacman { eat_
 
 ### WIP videos (BUGS! But it almost works.)
 
-https://github.com/user-attachments/assets/f06cb321-3c73-4ec0-bdab-6965b3821de4
+https://github.com/user-attachments/assets/6b4ef19c-9c5c-4da6-aa5d-4bac3b9edd62
 
-https://github.com/user-attachments/assets/f1584bc7-a3e8-4273-87ef-3d432059eddd
-
-https://github.com/user-attachments/assets/21c82063-c287-4301-a63c-7987b43b3e23
+https://github.com/user-attachments/assets/a32b8c12-7d2b-42a1-9578-b5d97f4688ef
 
 ---
 
