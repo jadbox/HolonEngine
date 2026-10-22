@@ -14,5 +14,5 @@ serde_json.workspace = true
 libc.workspace = true
 
 [[bin]]
-name = "cc"
+name = "holon"
 path = "src/main.rs"

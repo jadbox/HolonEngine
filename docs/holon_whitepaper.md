@@ -15,8 +15,8 @@ Interactive world engines have historically split into two flawed paradigms:
 A single static image cannot define space or causality because it is a frozen *explicate* slice ($t = t_0$) with zero temporal derivative ($\partial_t \Psi = 0$). Gameplay video, by contrast, encodes **non-commutative process transitions** $M_{A \to B} = \Psi_B \Psi_A^{-1}$ across time: camera parallax, occlusion, invariant HUD overlays, boundary incidence, and actor harmonics.
 
 `HolonEngine` implements a third architecture grounded in **David Bohm and Basil Hiley's Implicate Order** (*The Undivided Universe*, 1993; Hiley & Callaghan, "The Clifford Algebra Approach to Quantum Mechanics", 2010) and an **Algebraic Tower of Clifford Algebras** ($\mathcal{C}\ell_{0,1} \to \mathcal{C}\ell_{2,0} \to \mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$), where higher-order algebras naturally enfold lower ones without destroying them:
-* **Enfoldment (`cc enfold`):** Compiles raw gameplay video into an invariant **Implicate World Model (`.cc`)**—extracting camera `Motor` odometry, ghost-free world panoramas, oriented PGA boundary blades, chromatic/semantic spinor signatures, and canonical actor processes without game-specific rules.
-* **Unfoldment (`cc unfold`):** Runs the compiled `.cc` model forward at thousands of hertz as a unified, zero-AI Clifford dynamical system where every entity is an algebraic process coupled to the surrounding spatial medium.
+* **Enfoldment (`holon enfold`):** Compiles raw gameplay video into an invariant **Implicate World Model (`.cc`)**—extracting camera `Motor` odometry, ghost-free world panoramas, oriented PGA boundary blades, chromatic/semantic spinor signatures, and canonical actor processes without game-specific rules.
+* **Unfoldment (`holon unfold`):** Runs the compiled `.cc` model forward at thousands of hertz as a unified, zero-AI Clifford dynamical system where every entity is an algebraic process coupled to the surrounding spatial medium.
 
 ---
 
@@ -105,7 +105,7 @@ Simultaneously, boundary incidence against normal $\hat{\mathbf{n}}$ reflects th
 
 * **High-Level Overview:** Traditional game engines rely on discrete graph-search algorithms (such as A* or hand-authored navigation meshes) to route autonomous actors around obstacles. `HolonEngine` replaces discrete pathfinding graphs with a continuous spatial field called the **Clifford Quantum Potential** ($\mathcal{Q}_{\text{Cl}}$). Walls and solid boundaries act as high-impedance ridges in this field, while open corridors and targets form smooth valleys. Autonomous entities simply read the local slope and curvature of $\mathcal{Q}_{\text{Cl}}$ at their current position, receiving a continuous rotational steering torque that guides them smoothly around corners and barriers in $O(1)$ time per step.
 
-During `cc unfold`, the spatial lattice carries a real-time amplitude field $\Psi(x, y, t) = R(x, y, t)\,\mathcal{U}(x, y, t)$ governed by the **Clifford Quantum Potential**:
+During `holon unfold`, the spatial lattice carries a real-time amplitude field $\Psi(x, y, t) = R(x, y, t)\,\mathcal{U}(x, y, t)$ governed by the **Clifford Quantum Potential**:
 
 $$\mathcal{Q}_{\text{Cl}} = -(\nabla^2 \Psi)\Psi^{-1} = \underbrace{-\frac{\nabla^2 R}{R}}_{\text{Scalar Guidance } \langle \mathcal{Q}_{\text{Cl}} \rangle_0} - \underbrace{\left(2(\nabla \ln R)\mathcal{U}\nabla\widetilde{\mathcal{U}} + (\nabla^2 \mathcal{U})\widetilde{\mathcal{U}}\right)}_{\text{Bivector Spin-Torque } \langle \mathcal{Q}_{\text{Cl}} \rangle_2}$$
 
@@ -119,7 +119,7 @@ $$\mathcal{Q}_{\text{Cl}} = -(\nabla^2 \Psi)\Psi^{-1} = \underbrace{-\frac{\nabl
 
 ## 4. Game-Agnostic Spatiotemporal Compiler & Unified Runtime (`cc_field` + `cc_cli`)
 
-`cc enfold` compiles raw gameplay video into a self-contained `.cc` world model without per-game rules files, palette constants, or genre branches. Every architectural stage exists to replace a traditional hardcoded game assumption with an inferred algebraic or spectral invariant:
+`holon enfold` compiles raw gameplay video into a self-contained `.cc` world model without per-game rules files, palette constants, or genre branches. Every architectural stage exists to replace a traditional hardcoded game assumption with an inferred algebraic or spectral invariant:
 
 ### 4.1 Scene Stability Segmentation & Spectral Camera Regime Discovery
 * **Why It Matters:** Gameplay recordings contain title screens, menus, iris transitions, and static HUD bars that corrupt odometry if mixed with active playfield motion. Moreover, the compiler cannot pre-assume whether a game is a static arena, a horizontal side-scroller, or a vertical corridor shooter.
@@ -269,7 +269,7 @@ In $\mathbb{G}_{3,0,1}$, 2D orthographic worlds and 3D perspective corridor worl
 ### 6.1 Four-Stage Projectively Rectified CFT for 3D Enfoldment
 * **High-Level Overview:** In a 3D first-person view, walls closer to the camera appear taller on screen than distant walls ($h(x) \propto 1/z(x)$). Because of this perspective scaling, a standard 2D FFT across the whole screen fails. Instead, the 3D compiler analyzes each vertical pixel column relative to the horizon line to measure wall depth, stitches those depth columns into 3D wall planes as the player walks forward, and unwarps moving enemy sprites into flat canonical rest frames.
 
-A naive global 2D FFT across a perspective viewport fails because perspective projection ($y_{\text{screen}} \propto H / z$) chirps spatial frequencies from the horizon to the screen edge, and actor translation smears sprite spectra. Extending `cc enfold` to 3D corridor worlds replaces global 2D FFT registration with a four-stage **projectively rectified CFT**:
+A naive global 2D FFT across a perspective viewport fails because perspective projection ($y_{\text{screen}} \propto H / z$) chirps spatial frequencies from the horizon to the screen edge, and actor translation smears sprite spectra. Extending `holon enfold` to 3D corridor worlds replaces global 2D FFT registration with a four-stage **projectively rectified CFT**:
 
 1. **Screen-Locked HUD & Weapon Overlay Isolation (Temporal Phase Variance):**
    Rows and foreground regions whose pixel phase remains invariant across horizontal camera pans ($\partial_t \Psi \approx 0$ while global yaw $\Omega(t) \neq 0$) are partitioned first as 2D viewport-locked planes (bottom status bar and centered weapon overlay).
@@ -285,12 +285,12 @@ A naive global 2D FFT across a perspective viewport fails because perspective pr
 ### 6.2 3D Projective Incidence, Raycasting, & Active Information Navigation
 * **High-Level Overview:** Once the 3D wall planes and actor sprites are compiled, the runtime renders and simulates the 3D world using the same algebraic primitives as 2D. Camera rays and weapon shots find wall intersections via the PGA meet operator ($\vee$), enemy line-of-sight is a straight line joining two points ($P_{\text{player}} \vee P_{\text{enemy}}$) checked against wall planes, and enemies navigate 3D corridors using the same $\mathcal{Q}_{\text{Cl}}$ potential field without navmeshes.
 
-The core 3D geometric primitives are already verified in `crates/cc_math/src/pga.rs` (`ray_hit_plane`, `ray_hit_plane_pga`, `plane_through_point`, `snap_manhattan_plane`, `integrate_3d_ego`). In a full 3D `cc unfold` runtime, interaction and rendering operate directly in $\mathbb{G}_{3,0,1}$:
+The core 3D geometric primitives are already verified in `crates/cc_math/src/pga.rs` (`ray_hit_plane`, `ray_hit_plane_pga`, `plane_through_point`, `snap_manhattan_plane`, `integrate_3d_ego`). In a full 3D `holon unfold` runtime, interaction and rendering operate directly in $\mathbb{G}_{3,0,1}$:
 
 * **PGA Ray-Plane Intersection & Line-of-Sight:** Viewport columns and weapon rays intersect wall and door `Plane`s via the PGA regressive product (`Line::antiwedge(ray, plane)`). Actor line-of-sight is evaluated via the join $L_{\text{los}} = P_{\text{player}} \vee P_{\text{enemy}}$ and tested for wall occlusion via $L_{\text{los}} \wedge \Pi_{\text{wall}}$, while sliding doors translate along their PGA `Line` hinge/rail axes.
 * **Zero-A* 3D Corridor Navigation:** Over the reconstructed 3D floorplan, the player emits a distance-cone ground while walls and closed doors inject high-impedance repeller ridges into $\mathcal{Q}_{\text{Cl}} = -(\nabla^2 \Psi)\Psi^{-1}$. Autonomous actors follow $-\nabla \langle \mathcal{Q}_{\text{Cl}} \rangle_0$ and steer their 3D PGA `Motor`s via bivector spin-torque $\langle \mathcal{Q}_{\text{Cl}} \rangle_2$, rounding corridor corners and flanking obstacles without navmeshes.
 
-| 3D Component Class | How `cc enfold` Extracts It (CFT + PGA + Spinors) | How `cc unfold` Runs It |
+| 3D Component Class | How `holon enfold` Extracts It (CFT + PGA + Spinors) | How `holon unfold` Runs It |
 | :--- | :--- | :--- |
 | **HUD & Weapon Overlay** | CFT detects zero ego-motion parallax on the bottom status bar and centered weapon anchor during camera yaw $\Omega(t) \neq 0$. | Pinned to the 2D screen plane; state variables update via incidence couplings when projectiles or pickups intersect the player `Point`. |
 | **Player Ego Movement** | Optical CFT phase flow extracts forward translation speed and yaw angular velocity $M_{\text{ego}}(t) \in \text{Spin}(3,0,1)$. | User input drives $M_{\text{player}}$ (`integrate_3d_ego`); wall `Plane` impedance prevents clipping via $\mathcal{Q}_{\text{Cl}}$ repulsion. |

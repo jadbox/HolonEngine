@@ -1,9 +1,9 @@
-//! `cc` — HolonEngine model compiler and 2D runtime.
+//! `holon` — HolonEngine model compiler and 2D runtime.
 //!
 //! ```sh
-//! cc enfold example_input2d/smb3_w1_1_256x240.mp4 -o /tmp/opencode/smb3.cc
-//! cc inspect /tmp/opencode/smb3.cc --atlas /tmp/opencode/atlas.png
-//! cc unfold /tmp/opencode/smb3.cc --frames 600 --capture /tmp/opencode/run -o /tmp/opencode/run.mp4
+//! holon enfold example_input2d/smb3_w1_1_256x240.mp4 -o /tmp/opencode/smb3.cc
+//! holon inspect /tmp/opencode/smb3.cc --atlas /tmp/opencode/atlas.png
+//! holon unfold /tmp/opencode/smb3.cc --frames 600 --capture /tmp/opencode/run -o /tmp/opencode/run.mp4
 //! ```
 
 use std::io;
@@ -15,17 +15,17 @@ use cc_field::model2d::Model2D;
 use cc_field::video_io;
 
 const USAGE: &str = "\
-cc — 2D game model compiler
+holon — 2D game model compiler
 
 USAGE:
-  cc enfold <video> [-o model.cc] [--start S] [--duration S]
-  cc inspect <model.cc> [--atlas out.png] [--tiles out.png]
-  cc unfold <model.cc> [--frames N] [--capture DIR] [-o out.mp4] [--no-video]
+  holon enfold <video> [-o model.cc] [--start S] [--duration S]
+  holon inspect <model.cc> [--atlas out.png] [--tiles out.png]
+  holon unfold <model.cc> [--frames N] [--capture DIR] [-o out.mp4] [--no-video]
 ";
 
 fn main() {
     if let Err(e) = run() {
-        eprintln!("cc: {e}");
+        eprintln!("holon: {e}");
         std::process::exit(1);
     }
 }

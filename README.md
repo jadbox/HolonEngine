@@ -5,7 +5,7 @@
 
 **HolonEngine** compiles raw gameplay video streams into deterministic, self-contained Implicate World Models that executes with zero neural inference at runtime.
 
-Conventional game engines hardcode per-game state machines (`if is_pacman { eat_dot() } else if is_mario { stomp_goomba() }`), while autoregressive video world models hallucinate pixels frame-by-frame without persistent geometry or conservation laws. **HolonEngine** replaces both with an algebraic process ontology: **`cc enfold`** extracts camera odometry, actor-free panoramas, oriented geometric boundaries, and canonical spinor processes from raw video; **`cc unfold`** evolves the compiled `.cc` world forward via Bohmian momentum, state idempotents, and the Clifford Quantum Potential.
+Conventional game engines hardcode per-game state machines (`if is_pacman { eat_dot() } else if is_mario { stomp_goomba() }`), while autoregressive video world models hallucinate pixels frame-by-frame without persistent geometry or conservation laws. **HolonEngine** replaces both with an algebraic process ontology: **`holon enfold`** extracts camera odometry, actor-free panoramas, oriented geometric boundaries, and canonical spinor processes from raw video; **`holon unfold`** evolves the compiled `.cc` world forward via Bohmian momentum, state idempotents, and the Clifford Quantum Potential.
 
 ### WIP videos (BUGS! But it almost works.)
 
@@ -40,26 +40,23 @@ Conventional game engines treat worlds atomistically: independent objects manipu
 # Run the workspace verification suite (Clifford algebra, PGA incidence, CFT odometry, and model roundtrips)
 cargo test --release
 
-# Build the `cc` compiler and runtime binary
+# Build the `holon` compiler and runtime binary
 cargo build --release
 
 # 1. Enfold raw gameplay videos into self-contained .cc world models (no rules file required)
-./target/release/cc enfold example_input2d/smb3_w1_1_256x240.mp4 -o example_input2d/smb3.cc
-./target/release/cc enfold example_input2d_pacman/pacman_240x308.mp4 -o example_input2d_pacman/pacman.cc
-./target/release/cc enfold example_input2d_raptor/raptor_320x240.mp4 --start 0 --duration 25 -o example_input2d_raptor/raptor.cc
+./target/release/holon enfold example_input2d/smb3_w1_1_256x240.mp4 -o example_input2d/smb3.cc
+./target/release/holon enfold example_input2d_pacman/pacman_240x308.mp4 -o example_input2d_pacman/pacman.cc
+./target/release/holon enfold example_input2d_raptor/raptor_320x240.mp4 --start 0 --duration 25 -o example_input2d_raptor/raptor.cc
 
 # 2. Inspect a compiled .cc model (manifest metadata, boundary layout, and diagnostic PNG dumps)
-./target/release/cc inspect example_input2d/smb3.cc --atlas /tmp/smb3_atlas.png --tiles /tmp/smb3_tiles.png
-./target/release/cc inspect example_input2d_pacman/pacman.cc --atlas /tmp/pacman_atlas.png
-./target/release/cc inspect example_input2d_raptor/raptor.cc --atlas /tmp/raptor_atlas.png
+./target/release/holon inspect example_input2d/smb3.cc --atlas /tmp/smb3_atlas.png --tiles /tmp/smb3_tiles.png
+./target/release/holon inspect example_input2d_pacman/pacman.cc --atlas /tmp/pacman_atlas.png
+./target/release/holon inspect example_input2d_raptor/raptor.cc --atlas /tmp/raptor_atlas.png
 
 # 3. Unfold a compiled .cc model forward at >2,000 Hz and record MP4 verification demos
-./target/release/cc unfold example_input2d/smb3.cc -o recordings/task_demo_smb3_playable.mp4
-./target/release/cc unfold example_input2d_pacman/pacman.cc -o recordings/task_demo_pacman_replay.mp4
-./target/release/cc unfold example_input2d_raptor/raptor.cc -o recordings/task_demo_raptor_playable.mp4
-
-# 4. Step a live 2D Clifford wave + Q_Cl potential field with inertial boats
-./target/release/cc sim --grid 128 --frames 240 --boats 6 -o /tmp/qcl_sim.mp4
+./target/release/holon unfold example_input2d/smb3.cc -o recordings/task_demo_smb3_playable.mp4
+./target/release/holon unfold example_input2d_pacman/pacman.cc -o recordings/task_demo_pacman_replay.mp4
+./target/release/holon unfold example_input2d_raptor/raptor.cc -o recordings/task_demo_raptor_playable.mp4
 ```
 
 ---
@@ -79,4 +76,4 @@ cargo build --release
 | :--- | :--- |
 | [`crates/cc_math`](./crates/cc_math) | $\mathbb{G}_{2,0}$ multivectors (`Mv2`), Hiley's `CliffordDensityElement`, `CliffordQuantumPotential`, primitive `StateIdempotent` & `TransitionOperator`, and $\mathbb{G}_{3,0,1}$ PGA blades/motors. |
 | [`crates/cc_field`](./crates/cc_field) | Split-step Fourier wave solver, sampled `QField` gradients, `ffmpeg` video IO, 2D CFT scroll odometry, temporal-mode atlas stitcher, spinor-coherent actor tracker, and `.cc` (`CC2D`) container codec. |
-| [`crates/cc_cli`](./crates/cc_cli) | `cc` command-line compiler and runtime (`enfold`, `inspect`, `unfold`, `sim`, `enfold-dump`). |
+| [`crates/cc_cli`](./crates/cc_cli) | `holon` command-line compiler and runtime (`enfold`, `inspect`, `unfold`). |

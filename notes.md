@@ -33,7 +33,7 @@
 ## Model and runtime
 - `.cc` (CC2D v1): `"CC2D" | u32 version | u32 manifest_len | JSON manifest | u32 atlas_png_len | PNG | u32 hud_png_len (0 = none) | PNG | sprite PNGs`. The manifest lists tile kinds, scroll, platforms, solid runs, sprites and tracks; images stay PNG so the container is small (166 KB for the 978×193 SMB3 atlas + HUD + 9 sprites).
 - Player collision: leading-edge-only horizontal resolution, move-then-resolve vertically, one-way only when falling with `prev_feet <= top + 2`, solid landing tolerance one tile. Resolving *all* overlapped tiles per axis teleports the player through the floor; the leading-edge rule does not.
-- `cc unfold` is headless at 3–16 kHz (release); rendering = atlas blit + static HUD composite + player marker.
+- `holon unfold` is headless at 3–16 kHz (release); rendering = atlas blit + static HUD composite + player marker.
 
 ## Actor tracking and Hiley process ontology
 - Residuals compare each frame to the atlas at its scroll offset. Off-by-one registration turns every sprite edge into a full-screen residual: refine the FFT offset with an exhaustive ±1 SSAD search (normalised by covered area) before masking.
@@ -64,7 +64,7 @@
 ## Architecture decisions
 - `cc_field` owns video IO, 2D enfold, atlas, tiles, actor tracks, sprite CFT, and the `.cc` (CC2D) model format.
 - `cc_math` owns G(2,0) `Mv2`, `Q_Cl`, PGA line/plane incidence, Manhattan snap, camera motors, state idempotents.
-- `cc_cli` provides `cc enfold | inspect | unfold`.
+- `cc_cli` provides `holon enfold | inspect | unfold`.
 - Model = header + JSON manifest + PNG atlas + PNG sprite sheets. No serde on huge arrays.
 - Runtime is zero-AI: deterministic scripted/terminal input, tile/PGA collision, Q_Cl diagnostics.
 - Engine must stay game-agnostic: colours, palettes and object classes are *learned* or supplied by a per-game rules file, never baked into `cc_field`.

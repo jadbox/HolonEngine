@@ -20,9 +20,9 @@ Grounded in the [Dzog philosophy](https://github.com/jadbox/dzog/blob/main/philo
    * $\{\epsilon_{i,s}, \hat{K}_{i,s}(\mathbf{k}, \omega)\}$: Primitive state idempotents ($\epsilon_s^2 = \epsilon_s$) paired with unwarped 2D+t CFT sprite/texture kernels.
 2. **Strict Division of Labor:**
    * **CFT Spectral Extractor (`cc_field`):** Isolates zero-parallax HUD bars, estimates camera `Motor` odometry, separates static world geometry from moving actors, and extracts canonical 2D+t CFT sprite loops.
-   * **Semantic Transducer (`llama.cpp` VLM + Embeddings):** Runs only during `cc enfold` (with deterministic `.cc_cache/` JSON fixtures) to label entity types/states and embed `rules.md`.
+   * **Semantic Transducer (`llama.cpp` VLM + Embeddings):** Runs only during `holon enfold` (with deterministic `.cc_cache/` JSON fixtures) to label entity types/states and embed `rules.md`.
    * **Algebraic Incidence & Transition Compiler (`cc_math` + `cc_field`):** Snaps geometry to tile/Manhattan lattices via spectral Bragg peaks and `pga::snap_manhattan_plane`, and compiles empirical PGA incidence predicates (`StompTop`, `HitBlockBottom`, `UseDoor`, `LineOfSight`, `RayHit`) directly into state transition operators $T_{s \to s'} = \epsilon_{s'} M \epsilon_s$.
-3. **Playable Unfoldment (`cc unfold`):** Zero AI at runtime. Steps at $> 120\text{ Hz}$ headless and $60\text{ Hz}$ interactive (`--play`), rendering either the 2D side-scrolling tile+sprite world or the 3D PGA column-raycast world alongside live $\mathcal{Q}_{\text{Cl}}$ potential diagnostics.
+3. **Playable Unfoldment (`holon unfold`):** Zero AI at runtime. Steps at $> 120\text{ Hz}$ headless and $60\text{ Hz}$ interactive (`--play`), rendering either the 2D side-scrolling tile+sprite world or the 3D PGA column-raycast world alongside live $\mathcal{Q}_{\text{Cl}}$ potential diagnostics.
 
 ---
 
@@ -42,12 +42,12 @@ holonengine/
 ├── crates/
 │   ├── cc_math/       # G(2,0) spinors, idempotents, Q_Cl, G(3,0,1) PGA blades, Motors, meet/join
 │   ├── cc_field/      # HUD separator, 2D CFT scroll + atlas stitcher, 3D column depth, 2D+t sprite CFT
-│   └── cc_cli/        # `cc enfold | inspect | unfold` CLI, 2D & 3D playable runtimes
+│   └── cc_cli/        # `holon enfold | inspect | unfold` CLI, 2D & 3D playable runtimes
 ```
 
 ---
 
-## 3. Concrete Algorithms: How `cc enfold` Compiles 2D and 3D Worlds
+## 3. Concrete Algorithms: How `holon enfold` Compiles 2D and 3D Worlds
 
 ### Stage 1 — Bezel & HUD Partition (`partition_hud_and_viewport`)
 1. Compute per-row and per-pixel temporal luminance/phase variance $\sigma_t^2(x, y)$ and cross-correlation with global camera optical flow across a sampled frame window.
@@ -120,14 +120,14 @@ Compute the 2D spatial CFT cross-power spectrum $\frac{\hat{I}_t \hat{I}_{t-1}^*
     1. HUD mask IoU $> 0.98$,
     2. Monotonic rightward scroll odometry matching ground-truth level displacement within $< 1.5\text{ px/frame}$,
     3. Ghost-free stitched World 1-1 background panorama (temporal median removes $> 99\%$ of Mario/Goomba pixels from the static atlas),
-    4. Playable `cc unfold smb3.cc` run where Mario runs, jumps onto a one-way screw-box platform, hits a `?` block from below, and stomps a Goomba at $> 120\text{ FPS}$ headless / $60\text{ FPS}$ interactive.
+    4. Playable `holon unfold smb3.cc` run where Mario runs, jumps onto a one-way screw-box platform, hits a `?` block from below, and stomps a Goomba at $> 120\text{ FPS}$ headless / $60\text{ FPS}$ interactive.
 
 #### Phase 2 audit — defect resolutions (2026-10-21)
 
 1. **Odometry HUD exclusion:** `ScrollEstimator::gray()` now stores `band_h` and limits sampling to rows `0..band_h`, zeroing the static HUD buffer. Eliminates the $\pm 10\text{ px}$ registration smear; clouds and block borders are pixel-sharp.
 2. **Actor mask coordinates:** Pass 3 passes residual boxes directly in frame coordinates (`*b`), ensuring moving actors are properly masked out during atlas synthesis.
 3. **Grounded obstacle shelf extraction:** Grounded components ($h \ge 2\times\text{TILE}$, bottom touching ground line) are segmented into horizontal flat shelves of width $\ge 12\text{ px}$. Pastel block tops and the green pipe top are promoted to one-way collision surfaces while leaving curved green hills as scenery.
-4. **Sprite rendering:** `cc unfold` composites the canonical extracted player sprite with alpha blending, centered and feet-aligned.
+4. **Sprite rendering:** `holon unfold` composites the canonical extracted player sprite with alpha blending, centered and feet-aligned.
 5. **Autonomous Actor Holons & Clifford Patrol / Stomp:** Modeled on Basil Hiley's process ontology (`crates/cc_math/src/holon.rs`, `CliffordDensityElement`). Entities inhabit minimal left ideals $\mathcal{I}_i = \mathcal{C}\ell \epsilon_i$ with density element $\rho_{c,i} = \Phi_{L,i}\widetilde{\Phi}_{L,i} = \rho_i U_i \epsilon_{i,s}\widetilde{U}_i$, bilinear heading $\mathbf{s}_i = U_i e_1 \widetilde{U}_i$, and Bohm momentum $\mathbf{P}_{B,i} = \rho_i v_{0,i} \mathbf{s}_i$. Principal mobility axis ($e_1$ vs $e_2$) and excursion bounds are inferred directly from the observed world-space excursion tensor `TrackRecord::span` without sprite-size heuristics. Lateral or vertical excursion boundary incidence triggers rotor reflection $U_i \mapsto N U_i \widetilde{N}$ and idempotent transition $T_{0 \leftrightarrow 1}$. Top-down relational incidence collapses the actor to $\epsilon_2$ ($\rho_i \to 0$) and imparts upward bounce restitution to the player. Demonstrated at $> 2500\text{ Hz}$ headless throughput (`recordings/task_demo_smb3_playable.mp4`).
 6. **Planar Zero-Gravity Arena Generalization (`example_input2d_pacman`):** Added spectral static-camera detection (`detect_camera_is_static`), topological 8-connected-component separation of extended maze walls ($\max(w, h) \ge 2 \times \text{tile}$) vs isolated corridor collectible excitations ($\max(w, h) \le \text{tile} + 4$, stored in `ModelManifest::collectibles`), chromatic-spinor-coherent actor tracking (`track_actors_coherent`) with toroidal warp-tunnel distance and composite-overlap rejection, and $\mathcal{Q}_{\text{Cl}}$-guided planar unfoldment (`recordings/task_demo_pacman_replay.mp4`) with zero game-specific RGB constants.
 7. **Tile-Free Continuous World Representation (`Model2D::solid_at_world`, `one_way_at_world`, `is_open_below_rect`, `build_continuous_qfield`):** Decoupled runtime collision and $\mathcal{Q}_{\text{Cl}}$ potential synthesis from discrete tile grids (`kinds: Vec<TileKind>`). Continuous world-space boundary rects/lines (`solids`, `platforms`, `collectibles`, `OrientedLine2`) are now the primary geometric representation so non-tile 2D games (vector arenas, freeform contours, curved slopes) execute with `tile = 0, kinds = []`, treating Bragg-lattice snapping strictly as an optional spectral prior when periodic CFT peaks exist.
@@ -166,10 +166,10 @@ Compute the 2D spatial CFT cross-power spectrum $\frac{\hat{I}_t \hat{I}_{t-1}^*
 * **Implementor Steps:**
   1. Add optional `llama.cpp` subprocess/HTTP client (`llama-mtmd-cli` / `llama-server` + `llama-embedding`), GBNF schema, and `.cc_cache/` fixture persistence.
   2. Implement Gram-matrix SVD spinor projection and bilinear spinor coherence coupling $\langle \psi_i, \widetilde{\psi}_j \rangle_0$ across both `example_input2d` and `example_input3d`.
-  3. Complete the unified `cc` CLI (`cc enfold <dir> -o <model.cc>`, `cc inspect <model.cc> [--query]`, `cc unfold <model.cc> [--play | --input | --perturb] [-o out.mp4]`) supporting both 2D side-scrolling and 3D PGA raycast worlds.
+  3. Complete the unified `holon` CLI (`holon enfold <dir> -o <model.cc>`, `holon inspect <model.cc> [--query]`, `holon unfold <model.cc> [--play | --input | --perturb] [-o out.mp4]`) supporting both 2D side-scrolling and 3D PGA raycast worlds.
 * **Exit Gate (Full Engine Complete):**
-  1. **2D Gate:** `cc enfold example_input2d -o smb3.cc && cc unfold smb3.cc --input example_input2d/play_trace.json -o smb3_play.mp4` produces a verified 60 FPS playable side-scroller + $\mathcal{Q}_{\text{Cl}}$ diagnostic video.
-  2. **3D Gate:** `cc enfold example_input3d -o wolf3d.cc && cc unfold wolf3d.cc --input example_input3d/play_trace.json -o wolf3d_play.mp4` produces a verified 60 FPS playable 3D raycast corridor + top-down $\mathcal{Q}_{\text{Cl}}$ diagnostic video.
+  1. **2D Gate:** `holon enfold example_input2d -o smb3.cc && holon unfold smb3.cc --input example_input2d/play_trace.json -o smb3_play.mp4` produces a verified 60 FPS playable side-scroller + $\mathcal{Q}_{\text{Cl}}$ diagnostic video.
+  2. **3D Gate:** `holon enfold example_input3d -o wolf3d.cc && holon unfold wolf3d.cc --input example_input3d/play_trace.json -o wolf3d_play.mp4` produces a verified 60 FPS playable 3D raycast corridor + top-down $\mathcal{Q}_{\text{Cl}}$ diagnostic video.
   3. **Counterfactual Gate:** Passing `--perturb` (e.g., `"guards flee from player"` or `"goombas leap toward Mario"`) flips the wording-space spinor phase and deterministically alters actor trajectories in both 2D and 3D runtimes.
 
 Development NOTES:
