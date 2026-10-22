@@ -1779,7 +1779,7 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
             }
             total > 0 && n as f64 / total as f64 >= 0.6
         };
-        const MAX_GAP: usize = 8;
+        const MAX_GAP: usize = 16;
         let mut tx = 0;
         while tx < cols {
             if surface_row[tx] != step {

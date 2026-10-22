@@ -166,14 +166,6 @@ impl Model2D {
                     sprites.push(png);
                 }
             }
-            let spawn = t
-                .boxes
-                .first()
-                .map(|(fi, b)| {
-                    let s = level.scroll.get(*fi).copied().unwrap_or([0, 0]);
-                    [b.x0 + s[0], b.y0 + s[1]]
-                })
-                .unwrap_or([0, 0]);
             let trajectory: Vec<[i32; 3]> = t
                 .boxes
                 .iter()
@@ -182,6 +174,17 @@ impl Model2D {
                     [*fi as i32, b.x0 + s[0], b.y0 + s[1]]
                 })
                 .collect();
+            let spawn = if trajectory.is_empty() {
+                [0, 0]
+            } else {
+                let first_x = trajectory[0][1];
+                let sample_len = trajectory.len().min(7);
+                let mut initial_ys: Vec<i32> =
+                    trajectory.iter().take(sample_len).map(|p| p[2]).collect();
+                initial_ys.sort_unstable();
+                let initial_y = initial_ys[initial_ys.len() / 2];
+                [first_x, initial_y]
+            };
             let span = if trajectory.is_empty() {
                 [0, 0]
             } else {

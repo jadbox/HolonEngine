@@ -1292,6 +1292,7 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
 
     // Instantiate autonomous actor holons from all non-player tracks using their
     // learned world-space excursion tensor `t.span` to orient the initial spinor rotor.
+    // Grounding in the implicate order: terrestrial processes are coupled to their supporting manifold.
     let mut actors: Vec<ActorHolon> = model
         .manifest
         .tracks
@@ -1313,13 +1314,41 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                 std::f64::consts::PI
             };
             let cde = cc_math::CliffordDensityElement::new(1.0, theta0, 0, 3, t.color);
-            let spawn_y = t.spawn[1] as f32;
+            let hw = t.size[0] as f32;
+            let hh = t.size[1] as f32;
+            let spawn_x = t.spawn[0] as f32;
+            let spawn_y = if m.gravity > 0.0 && !vertical_mode {
+                let center_x = spawn_x + hw * 0.5;
+                let feet_est = t.spawn[1] as f32 + hh;
+                let mut best_surface: Option<f32> = None;
+                for s in &model.manifest.solids {
+                    if (center_x as i32) >= s[0] && (center_x as i32) <= s[2] {
+                        let top = s[1] as f32;
+                        if (top - feet_est).abs() <= 24.0 {
+                            best_surface = Some(best_surface.map_or(top, |t| t.min(top)));
+                        }
+                    }
+                }
+                if best_surface.is_none() {
+                    for p in &model.manifest.platforms {
+                        if (center_x as i32) >= p[0] && (center_x as i32) <= p[2] {
+                            let top = p[1] as f32;
+                            if (top - feet_est).abs() <= 24.0 {
+                                best_surface = Some(best_surface.map_or(top, |t| t.min(top)));
+                            }
+                        }
+                    }
+                }
+                best_surface.map_or(t.spawn[1] as f32, |top| top - hh)
+            } else {
+                t.spawn[1] as f32
+            };
             let amp_y = (t.span[1].max(16)) as f32;
             ActorHolon {
-                x: t.spawn[0] as f32,
+                x: spawn_x,
                 y: spawn_y,
-                w: t.size[0] as f32,
-                h: t.size[1] as f32,
+                w: hw,
+                h: hh,
                 speed: if vertical_mode { 0.35 } else { 0.5 },
                 bounds_y: [spawn_y - amp_y, spawn_y],
                 cde,
@@ -1472,6 +1501,34 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                 a.cde.reflect_at_boundary(normal, &basis);
             }
 
+            // Environmental surface support constraint for terrestrial processes
+            if m.gravity > 0.0 {
+                let center_x = a.x + a.w * 0.5;
+                let feet = a.y + a.h;
+                let mut surface_top: Option<f32> = None;
+                for s in &model.manifest.solids {
+                    if (center_x as i32) >= s[0] && (center_x as i32) <= s[2] {
+                        let top = s[1] as f32;
+                        if feet >= top - 8.0 && feet <= top + 16.0 {
+                            surface_top = Some(surface_top.map_or(top, |t| t.min(top)));
+                        }
+                    }
+                }
+                if surface_top.is_none() {
+                    for p in &model.manifest.platforms {
+                        if (center_x as i32) >= p[0] && (center_x as i32) <= p[2] {
+                            let top = p[1] as f32;
+                            if feet >= top - 8.0 && feet <= top + 16.0 {
+                                surface_top = Some(surface_top.map_or(top, |t| t.min(top)));
+                            }
+                        }
+                    }
+                }
+                if let Some(top) = surface_top {
+                    a.y = top - a.h;
+                }
+            }
+
             // Top-down relational incidence: downward player motion onto the actor's top boundary
             let feet = player.y + player.h;
             if player.vy > 0.0
@@ -1535,22 +1592,24 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
             }
         }
 
-        // Render bumping interactive block displacement in continuous world coordinates.
+        // Render interactive block props: active unhit state, bumping impulse, and spent state
         for prop in &block_props {
+            let bx = prop.rect[0] - cam_x as i32;
+            let by = prop.rect[1] - cam_y as i32;
+            let bw = (prop.rect[2] - prop.rect[0] + 1).max(1);
+            let bh = (prop.rect[3] - prop.rect[1] + 1).max(1);
+            if bx + bw <= 0 || bx >= vw as i32 || by + bh <= 0 || by >= vh as i32 {
+                continue;
+            }
+
             if prop.bump_timer > 0 {
-                let bx = prop.rect[0] - cam_x as i32;
-                let by = prop.rect[1] - cam_y as i32;
-                let bw = (prop.rect[2] - prop.rect[0] + 1).max(1);
-                let bh = (prop.rect[3] - prop.rect[1] + 2).max(1);
-                if bx + bw <= 0 || bx >= vw as i32 || by + bh <= 0 || by >= vh as i32 {
-                    continue;
-                }
+                let bh_bump = bh + 1;
                 // Parabolic upward bump displacement
                 let bump_dy = (-(prop.bump_timer as f32 * (8.0 - prop.bump_timer as f32)) / 3.0)
                     .round() as i32;
                 let bg = m.background;
                 // Clear original location to learned backdrop
-                for ty in 0..bh {
+                for ty in 0..bh_bump {
                     let dy = by + ty;
                     if dy >= 0 && dy < vh as i32 {
                         for tx in 0..bw {
@@ -1565,7 +1624,7 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                     }
                 }
                 // Draw region from model.atlas displaced upward by bump_dy
-                for ty in 0..bh {
+                for ty in 0..bh_bump {
                     let dy = by + bump_dy + ty;
                     let ay = (prop.rect[1] + ty).max(0) as usize;
                     if dy >= 0 && dy < vh as i32 && ay < ah {
@@ -1580,6 +1639,65 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                                 buf[idx + 2] = model.atlas.rgb[s + 2];
                             }
                         }
+                    }
+                }
+            } else if prop.state == 0 {
+                // State 0: Active interactive prop before impact (gleaming insignia, corner bolts, active state)
+                let gleam = (frame / 8) % 4;
+                let base_color = [252u8, 160, 68];
+                let glint_color = [255u8, 230, 180];
+                let black = [0u8, 0, 0];
+                let white = [255u8, 255, 255];
+                for ty in 0..bh {
+                    let dy = by + ty;
+                    if dy < 0 || dy >= vh as i32 {
+                        continue;
+                    }
+                    for tx in 0..bw {
+                        let dx = bx + tx;
+                        if dx < 0 || dx >= vw as i32 {
+                            continue;
+                        }
+                        let idx = (dy as usize * vw + dx as usize) * 3;
+                        let mut rgb = base_color;
+
+                        // Border
+                        if ty == 0 || ty == bh - 1 || tx == 0 || tx == bw - 1 {
+                            rgb = black;
+                        } else if (tx == 2 || tx == bw - 3) && (ty == 2 || ty == bh - 3) {
+                            // 4 corner bolts
+                            rgb = black;
+                        } else {
+                            // Question mark glyph pattern
+                            let is_white = matches!(
+                                (tx, ty),
+                                (5..=9, 3)
+                                    | (4..=5, 4)
+                                    | (9..=10, 4)
+                                    | (8..=9, 5)
+                                    | (7..=8, 6)
+                                    | (7..=8, 7)
+                                    | (7..=8, 10..=11)
+                            );
+                            let is_shadow = matches!(
+                                (tx, ty),
+                                (6..=8, 4)
+                                    | (10..=11, 5)
+                                    | (9..=10, 6)
+                                    | (8..=9, 7..=8)
+                                    | (8..=9, 11..=12)
+                            );
+                            if is_shadow {
+                                rgb = black;
+                            } else if is_white {
+                                rgb = if gleam == 2 { glint_color } else { white };
+                            } else if gleam == 1 && (ty == 1 || tx == 1) {
+                                rgb = glint_color;
+                            }
+                        }
+                        buf[idx] = rgb[0];
+                        buf[idx + 1] = rgb[1];
+                        buf[idx + 2] = rgb[2];
                     }
                 }
             }
