@@ -1,5 +1,8 @@
 # HolonEngine: The Implicate World Compiler
+
 ### Architecture & Systems Whitepaper: Process Ontology, Clifford Density Elements, and Active Information
+
+<small>by [Jonathan Dunlap](https://www.linkedin.com/in/jonathandunlap/)</small>
 
 ---
 
