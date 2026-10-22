@@ -11,7 +11,7 @@
 
 ## 1. Architectural Thesis
 
-Grounded in `general_philosophy.md` with the core concept in `storybook_philosophy.md` and the 'whitepaper.md' for engine technicals. `HolonEngine` compiles gameplay video(s) and text rules into a deterministic, playable Clifford world model:
+Grounded in the [Dzog philosophy](https://github.com/jadbox/dzog/blob/main/philosophy.md), with the core concept in `holon_philosophy.md` and `holon_whitepaper.md` for engine technicals. `HolonEngine` compiles gameplay video(s) and text rules into a deterministic, playable Clifford world model:
 
 1. **The Implicate Holon ($\mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$):** Every world component is compiled into:
    $$\mathcal{H}_i = \left(B_i \in \mathbb{G}_{3,0,1},\; \psi_i \in (\mathbb{G}_{2,0}^+)^K,\; \{\epsilon_{i,s}, \hat{K}_{i,s}(\mathbf{k}, \omega)\}\right)$$
@@ -180,4 +180,4 @@ Development NOTES:
 - If you get stuck on a hard problem with low confidence, you can call OpenCode CLI in non-interactive mode to use the great model Google Gemini 4 Argon to give you a solution plan to solve a hard problem. However, Argon is very expensive so only use it when you are stuck or really need another second oppinion. Example "opencode run --model google/argon-4 "Your name is Argon. Explain how closures work in JavaScript"" or adding file context "opencode run --model google/argon-4 -f src/main.ts "Your name is Argon. Review this file for edge cases"
 - save generated models (like smb3_v2.cc) into the example folder it was used to be generated from (i.e. example_input2d) and override cc models as needed.
 - If you pretty sure you fixed a visual bug, do another new video recording so I can keep up to date. Smartly determine if the bug fix requires folding a new model or just using the last built one (if the bug was just in the use of the model).
-- Consider updating docs/whitepaper.md with any key notable engine design systems concepts like using CliffordDensityElement.
+- Consider updating docs/holon_whitepaper.md with any key notable engine design systems concepts like using CliffordDensityElement.

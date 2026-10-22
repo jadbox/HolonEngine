@@ -168,7 +168,7 @@ $$\mathcal{Q}_{\text{Cl}} = -(\nabla^2 \Psi)\Psi^{-1} = \underbrace{-\frac{\nabl
 ### 5.1 Why a 2D World Model Must Not Assume a Tile Grid
 Many 2D games—vector space arenas (*Asteroids*, *Lunar Lander*, *Geometry Wars*), hand-painted continuous worlds (*Braid*, *Rayman*, *Limbo*), physics sandboxes (*Worms*), and freeform arcade tables (*Pinball*, *Pong*)—have **no discrete tile grid**. Even in games that use tiles (*Super Mario Bros. 3*, *Pac-Man*), treating `kinds: Vec<TileKind>` as the primary world ontology introduces artificial quantization, fixed cell-size assumptions, and axis-aligned bias.
 
-In accordance with `docs/storybook_philosophy.md` (§1.1, §4.2), the fundamental representation of a world in `HolonEngine` is **continuous**:
+In accordance with `docs/holon_philosophy.md` (§1.1, §4.2), the fundamental representation of a world in `HolonEngine` is **continuous**:
 
 1. **Continuous PGA Boundary Blades ($B_k \in \mathbb{G}_{3,0,1}$):**
    Static and semi-permeable world structures are stored in continuous world coordinates (`ModelManifest::solids`, `ModelManifest::platforms`, `ModelManifest::collectibles`, and oriented PGA lines `OrientedLine2`):

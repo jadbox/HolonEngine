@@ -22,7 +22,7 @@ https://github.com/user-attachments/assets/21c82063-c287-4301-a63c-7987b43b3e23
 
 ## Core Concepts: The Implicate Order as Computation
 
-Drawing on David Bohm and Basil Hiley's *Clifford Algebra Approach to Quantum Mechanics* (`docs/1011.4031_hiley_clifford_quantum_potential.pdf`) and `docs/storybook_philosophy.md`, every component of a compiled world is an **Algebraic Holon** coupled to an active spatial medium:
+Drawing on David Bohm and Basil Hiley's *Clifford Algebra Approach to Quantum Mechanics* (`docs/1011.4031_hiley_clifford_quantum_potential.pdf`) and `docs/holon_philosophy.md`, every component of a compiled world is an **Algebraic Holon** coupled to an active spatial medium:
 
 1. **The Clifford Density Element (`CliffordDensityElement`)**: Rather than storing ad-hoc boolean flags, each entity inhabits a minimal left ideal $\Phi_{L,i} = R_i\,U_i\,\epsilon_{i,s}$ with Clifford Density Element $\rho_{c,i} = \Phi_{L,i}\widetilde{\Phi}_{L,i} = \rho_i\,U_i\,\epsilon_{i,s}\,\widetilde{U}_i$. Heading $\mathbf{s}_i = U_i e_1 \widetilde{U}_i$ and Bohm momentum $\mathbf{P}_{B,i} = \rho_i v_{0,i}\mathbf{s}_i$ are extracted directly as algebraic bilinear invariants.
 2. **Primitive State Idempotents & Incidence Transitions**: Discrete behavioral branches (patrol, reflected return, bumped impulse, collapsed/consumed) are mutually orthogonal idempotents $\epsilon_s^2 = \epsilon_s$, $\epsilon_s \epsilon_{s'} = 0$. Geometric incidence in $\mathbb{G}_{3,0,1}$ triggers algebraic transitions $T_{s \to s'} = \epsilon_{s'} M \epsilon_s$ and rotor reflections $U_i \mapsto N U_i \widetilde{N}$.
@@ -64,9 +64,9 @@ cargo build --release
 
 ## Documentation
 
-- [**Engine Architecture Whitepaper (`docs/whitepaper.md`)**](./docs/whitepaper.md): Mathematical and systems specification of `CliffordDensityElement`, bilinear invariants, $\mathcal{Q}_{\text{Cl}}$ quantum torque, and tile-free continuous implicate world compilation.
-- [**Storybook Philosophy (`docs/storybook_philosophy.md`)**](./docs/storybook_philosophy.md): The Living Page thesis—Implicate Holons in $\mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$, CFT spectral decomposition, and Active-GATr dynamics.
-- [**General Ontology (`docs/general_philosophy.md`)**](./docs/general_philosophy.md): Philosophical and physical foundations of relation-first computing over continuous fields.
+- [**Engine Architecture Whitepaper (`docs/holon_whitepaper.md`)**](./docs/holon_whitepaper.md): Mathematical and systems specification of `CliffordDensityElement`, bilinear invariants, $\mathcal{Q}_{\text{Cl}}$ quantum torque, and tile-free continuous implicate world compilation.
+- [**Holon Philosophy (`docs/holon_philosophy.md`)**](./docs/holon_philosophy.md): The Living Page thesis—Implicate Holons in $\mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$, CFT spectral decomposition, and Active-GATr dynamics.
+- [**General Ontology (`philosophy.md`)**](https://github.com/jadbox/dzog/blob/main/philosophy.md): Philosophical and physical foundations of relation-first computing over continuous fields.
 - [**Execution Plan & Roadmap (`docs/plan.md`)**](./docs/plan.md): Phased milestones, verification gates, and audit history across 2D and 3D benchmarks.
 
 ---

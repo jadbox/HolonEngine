@@ -16,4 +16,5 @@ Cargo.lock.bak
 *.cc
 
 # Scratch
-old_files_ignore/
+*_ignore/
+*_bak/
