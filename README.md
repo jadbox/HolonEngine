@@ -60,16 +60,6 @@ cargo build --release
 
 ---
 
-## Verified Benchmark Demos
-
-| Benchmark | Regime | Compiled Model | Recorded Demo | Runtime Throughput |
-| :--- | :--- | :--- | :--- | :--- |
-| **Super Mario Bros. 3 (W1-1)** | `Ortho2D-Scroll` ($g_y > 0$) | [`example_input2d/smb3.cc`](./example_input2d/smb3.cc) | [`recordings/task_demo_smb3_playable.mp4`](./recordings/task_demo_smb3_playable.mp4) | $> 2,800\text{ Hz}$ headless |
-| **Pac-Man (Arcade)** | `Ortho2D-Static` ($g_y = 0$) | [`example_input2d_pacman/pacman.cc`](./example_input2d_pacman/pacman.cc) | [`recordings/task_demo_pacman_replay.mp4`](./recordings/task_demo_pacman_replay.mp4) | $> 2,200\text{ Hz}$ headless |
-| **Raptor: Call of the Shadows** | `Ortho2D-Vertical` ($g = 0$) | [`example_input2d_raptor/raptor.cc`](./example_input2d_raptor/raptor.cc) | [`recordings/task_demo_raptor_playable.mp4`](./recordings/task_demo_raptor_playable.mp4) | $> 2,600\text{ Hz}$ headless |
-
----
-
 ## Documentation
 
 - [**Engine Architecture Whitepaper (`docs/whitepaper.md`)**](./docs/whitepaper.md): Mathematical and systems specification of `CliffordDensityElement`, bilinear invariants, $\mathcal{Q}_{\text{Cl}}$ quantum torque, and tile-free continuous implicate world compilation.
