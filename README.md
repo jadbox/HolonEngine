@@ -1,7 +1,7 @@
 # HolonEngine
 <small>by [Jonathan Dunlap](https://www.linkedin.com/in/jonathandunlap/)</small>
 
-**Note: This is a WIP (pre-alpha) experimental proof-of-concept world compiler and runtime grounded in Projective Geometric Algebra ($\mathbb{G}_{3,0,1}$), Spinor Algebra ($\mathbb{G}_{2,0}$), and Basil Hiley's Clifford Implicate Order.**
+**Note: This is a WIP (pre-alpha) experimental proof-of-concept world compiler and runtime grounded in Projective Geometric Algebra, Spinor Algebra, and Basil Hiley's Clifford Implicate Order.**
 
 **HolonEngine** compiles raw gameplay video streams into deterministic, self-contained Implicate World Models that executes with zero neural inference at runtime.
 
