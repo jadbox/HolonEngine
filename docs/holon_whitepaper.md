@@ -23,6 +23,8 @@ A single static image cannot define space or causality because it is a frozen *e
 ## 2. Core Algebraic Abstractions (`cc_math`)
 
 ### 2.1 Minimal Left Ideals, Pregeometry, & The Clifford Density Element (`CliffordDensityElement`)
+* **High-Level Overview:** In a traditional game engine, an entity is a struct of disconnected variables (`x, y, vx, vy, facing_left, state_enum, is_alive`) that must be kept synchronized by imperative `if/else` branches. `HolonEngine` replaces that bag of mutable fields with a single algebraic object: the **Clifford Density Element (CDE)**. A CDE packs an entity's vitality (process density), directional orientation (spinor rotor), and active behavioral mode (idempotent switch) into one multivector state. Moving, turning, or deactivating an entity reduces to standard algebraic multiplication rather than ad-hoc flag manipulation.
+
 In classical geometry, space is a pre-existing container populated by zero-dimensional points. In Bohm and Hiley's algebraic *pregeometry* (Hiley & Callaghan, 2010, §2.1–2.5), there are no fundamental points in an external void; instead, **primitive idempotents** ($\epsilon^2 = \epsilon$) act as "generalized points"—self-sustaining processes that reproduce themselves under multiplication while generating spatial incidence through non-commutative relations.
 
 `HolonEngine` dispenses with external state vectors and ad-hoc entity flags. Every compiled world component (player, autonomous actor, interactive boundary, collectible token) is an **Algebraic Holon** represented as the unified tuple:
@@ -45,25 +47,29 @@ $$\rho_{c,i}(r, t) = \Phi_{L,i}(r, t)\,\widetilde{\Phi}_{L,i}(r, t) = \rho_i\, U
 where $\widetilde{\Phi}_L$ denotes the Clifford conjugate.
 
 ### 2.2 Bilinear Invariants of the First and Second Kind
-All observable kinematics and interactions of a `CliffordDensityElement` are computed as algebraic bilinear invariants:
+* **High-Level Overview:** Once an entity's state is compressed into a spinor wave $\Phi_{L,i}$, the engine needs a coordinate-free way to read out physical observables—such as whether the entity is active, which direction it is facing, whether two entities across frames are the same character, or how fast it is moving. In geometric algebra, a **bilinear invariant** extracts these quantities by sandwiching an algebraic basis element between the state and its reverse ($\Phi_L (\cdots) \widetilde{\Phi}_L$). **First-kind invariants** depend only on the instantaneous state value (reading posture, vitality, and visual identity), whereas **second-kind invariants** sandwich spatial or temporal derivatives (reading momentum and steering forces).
+
+All observable kinematics and interactions of a `CliffordDensityElement` are computed through these two families of invariants:
 
 1. **Bilinear Invariants of the First Kind (Kinematic Posture & Identity):**
-   * **Process Density:** $\rho_i = \text{tr}(\rho_{c,i}) = R_i^2\,\text{tr}(\epsilon_{i,s})$. Collapsing a holon to a null/consumed state sets $\rho_i \to 0$.
-   * **Directed Spin / Heading Vector (`heading_vector`):**
+   * **Process Density:** $\rho_i = \text{tr}(\rho_{c,i}) = R_i^2\,\text{tr}(\epsilon_{i,s})$. Measures how "present" or active the holon is; collapsing a holon to a null/consumed state sets $\rho_i \to 0$.
+   * **Directed Spin / Heading Vector (`heading_vector`):** Rotates the reference axis $e_1$ by the holon's spinor rotor $U_i$ to yield its unit facing vector in world space:
      $$\mathbf{s}_i = U_i\,e_1\,\widetilde{U}_i = (\cos\theta_i,\;\sin\theta_i)$$
    * **Intrinsic Spinor Coherence (`signature_coherence`):**
-     Each holon carries a multi-channel chromatic/semantic spinor $\psi_i \in (\mathbb{G}_{2,0}^+)^K$. The inner product $\langle \psi_i, \widetilde{\psi}_j \rangle_0 \in [0, 1]$ measures identity coherence across frames, occlusions, and warp boundaries.
+     Each holon carries a multi-channel chromatic/semantic spinor $\psi_i \in (\mathbb{G}_{2,0}^+)^K$. The inner product $\langle \psi_i, \widetilde{\psi}_j \rangle_0 \in [0, 1]$ measures identity similarity across frames, occlusions, and warp boundaries without brittle RGB equality checks.
 
 2. **Bilinear Invariants of the Second Kind (Bohm Momentum & Quantum Torque):**
    * **Bohm Momentum (`bohm_momentum`):**
-     Derived from the antisymmetric Dirac derivative $\Phi_L \overleftrightarrow{\partial} \widetilde{\Phi}_L = (\partial \Phi_L)\widetilde{\Phi}_L - \Phi_L(\partial \widetilde{\Phi}_L)$ (Hiley eq. 2.7, 3.3, 4.15):
+     Measures the directed flux of the process through space. Derived from the antisymmetric Dirac derivative $\Phi_L \overleftrightarrow{\partial} \widetilde{\Phi}_L = (\partial \Phi_L)\widetilde{\Phi}_L - \Phi_L(\partial \widetilde{\Phi}_L)$ (Hiley eq. 2.7, 3.3, 4.15):
      $$\mathbf{P}_{B,i} = -\Omega_i \cdot S_i = \rho_i\,v_{0,i}\,\mathbf{s}_i$$
    * **Quantum Torque Steering (`apply_quantum_torque`):**
-     The spatial gradient of the Clifford Quantum Potential $-\nabla \langle \mathcal{Q}_{\text{Cl}} \rangle_0$ exerts a bivector torque on the holon's spinor rotor (Hiley eq. 5.18, 5.27):
+     Measures the rotational force exerted on the holon's heading rotor by the surrounding environment. The spatial gradient of the Clifford Quantum Potential $-\nabla \langle \mathcal{Q}_{\text{Cl}} \rangle_0$ produces a bivector torque via the outer (wedge) product with the current heading (Hiley eq. 5.18, 5.27):
      $$\Omega_{Q,i} = \mathbf{s}_i \wedge \left(-\nabla \langle \mathcal{Q}_{\text{Cl}} \rangle_0\right), \qquad U_i(t + \Delta t) = U_i(t)\,\exp\left(-\frac{1}{2}\gamma\,\Omega_{Q,i}\,\Delta t\right)$$
      This single equation steers autonomous holons smoothly along open corridor valleys and around obstacles without game-specific pathfinding.
 
 ### 2.3 Primitive State Idempotents & Transition Operators (`StateBasis`, `TransitionOperator`)
+* **High-Level Overview:** Traditional engines manage discrete actor behaviors (patrolling, rebounding, stunned, spent) using `switch (state)` blocks scattered across update loops. `HolonEngine` represents discrete states as mutually orthogonal **primitive idempotents** ($\epsilon_s$)—algebraic projection operators that satisfy $\epsilon_s^2 = \epsilon_s$ and annihilate every other state ($\epsilon_s \epsilon_{s'} = 0$). Switching from state $s$ to $s'$ is executed by multiplying the holon by a **transition operator** $T_{s \to s'} = \epsilon_{s'} M \epsilon_s$ triggered directly when two geometric blades intersect.
+
 Discrete behavioral regimes are represented by mutually orthogonal primitive idempotents (`crates/cc_math/src/idempotent.rs`):
 
 $$\epsilon_s^2 = \epsilon_s, \qquad \epsilon_s \epsilon_{s'} = 0 \;\;(s \neq s'), \qquad \sum_{s=0}^{N-1} \epsilon_s = I$$
@@ -82,7 +88,7 @@ Simultaneously, boundary incidence against normal $\hat{\mathbf{n}}$ reflects th
 | **Field Excitation Absorption** | $P_{\text{actor}} \cap B_{\text{excitation}} \neq \varnothing$ | Excitation $T_{0 \to 2}$ ($\rho \to 0$) | Passing through a corridor dot, pellet, or coin absorbs the excitation into actor energy. |
 
 ### 2.4 Abstract Attached Process Effects & Medium Excitations
-Rather than hardcoding ad-hoc visual particle routines or game-specific cosmetic emitters (e.g., jet nozzles, foot dust, or muzzle flashes), `HolonEngine` models all secondary visual phenomena as **Abstract Attached Process Excitations** coupled directly to a holon's boundary blades $B_i$, heading rotor $U_i$, and Bohm momentum $\mathbf{P}_{B,i}$:
+* **High-Level Overview:** Rather than hardcoding game-specific particle emitters (such as jet thrusters, footstep dust, muzzle flashes, or collectible coins), `HolonEngine` models all secondary visual and physical phenomena as four generic **medium excitations** coupled directly to a holon's boundary blades $B_i$, heading rotor $U_i$, and Bohm momentum $\mathbf{P}_{B,i}$:
 
 1. **Attached Trailing Wakes (`AttachedWake`):**
    Emanates from the holon's trailing boundary blade $\mathbf{p}_{\text{tail}} = \mathbf{p}_{\text{center}} - \frac{1}{2}h\,\mathbf{s}_i$ opposite to the heading vector $-\mathbf{s}_i$. Characterized by process lifetime $\tau$, velocity $\mathbf{v}_{\text{wake}} \propto -\mathbf{s}_i$, and dispersion radius $r(t)$. Generalizes across aero/fluid thrusters, vessel wakes, running dust, and particle trails.
@@ -96,6 +102,8 @@ Rather than hardcoding ad-hoc visual particle routines or game-specific cosmetic
 ---
 
 ## 3. Active Information & The Clifford Quantum Potential (`cc_field::potential`)
+
+* **High-Level Overview:** Traditional game engines rely on discrete graph-search algorithms (such as A* or hand-authored navigation meshes) to route autonomous actors around obstacles. `HolonEngine` replaces discrete pathfinding graphs with a continuous spatial field called the **Clifford Quantum Potential** ($\mathcal{Q}_{\text{Cl}}$). Walls and solid boundaries act as high-impedance ridges in this field, while open corridors and targets form smooth valleys. Autonomous entities simply read the local slope and curvature of $\mathcal{Q}_{\text{Cl}}$ at their current position, receiving a continuous rotational steering torque that guides them smoothly around corners and barriers in $O(1)$ time per step.
 
 During `cc unfold`, the spatial lattice carries a real-time amplitude field $\Psi(x, y, t) = R(x, y, t)\,\mathcal{U}(x, y, t)$ governed by the **Clifford Quantum Potential**:
 
@@ -199,9 +207,24 @@ In accordance with `docs/holon_philosophy.md` (§II–§III), the fundamental re
    The Clifford Quantum Potential $\mathcal{Q}_{\text{Cl}} = -(\nabla^2 R)/R$ is constructed directly from continuous world-space geometry (`solids`, `platforms`, `collectibles`) over $[0, W_{\text{world}}] \times [0, H_{\text{world}}]$—requiring **zero tile metadata** (`tile = 0, cols = 0, rows = 0, kinds = []` is a valid, fully functional `.cc` model, verified by `model2d::tests::tile_free_continuous_world_queries_and_qfield`).
 
 3. **Bragg Lattice Snapping as an Optional Spectral Regularizer:**
-   When the 2D CFT of the temporal-mode world atlas $\hat{A}(k_x, k_y)$ exhibits sharp Bragg peaks at $(k_{\text{tile},x}, k_{\text{tile},y}) = (2\pi/\lambda_x, 2\pi/\lambda_y)$ with peak-to-median spectral energy exceeding threshold $\tau_{\text{Bragg}}$, a Manhattan/lattice spectral regularizer snaps noisy pixel contours onto the discovered period $(\lambda_x, \lambda_y)$. When no Bragg peak is present (continuous/non-tile 2D games), $\tau_{\text{Bragg}}$ is not met and boundaries remain unquantized continuous PGA contours in $\mathbb{G}_{3,0,1}$.
+   * **Problem Solved:** Raw contours extracted from compressed gameplay video often exhibit $\pm 1\text{ px}$ edge noise or slight camera registration jitter. In tile-based games, those noisy edges should snap to the true underlying grid without forcing a false grid onto continuous, non-tile games.
+   * **Method:** Borrowing from X-ray crystallography, where a periodic crystal lattice produces sharp **Bragg diffraction peaks** in Fourier space, `enfold` inspects the 2D CFT spectrum $\hat{A}(k_x, k_y)$ of the reconstructed world atlas. When sharp spectral peaks appear at $(k_{\text{tile},x}, k_{\text{tile},y}) = (2\pi/\lambda_x, 2\pi/\lambda_y)$ with peak-to-median energy exceeding threshold $\tau_{\text{Bragg}}$, a closed-form lattice regularizer snaps noisy contour coordinates onto the discovered fundamental period $(\lambda_x, \lambda_y)$. When no Bragg peak is present (continuous/non-tile 2D games), $\tau_{\text{Bragg}}$ is not met and boundaries remain unquantized continuous PGA contours in $\mathbb{G}_{3,0,1}$.
 
-### 5.2 Empirical Systems Laws Discovered from Benchmark Unfoldment
+### 5.2 Why Closed-Form Clifford & Spectral Operators Replace Geometric Algebra Transformers (`Active-GATr`)
+* **High-Level Overview:** Early architectural plans considered a neural Geometric Algebra Transformer (`Active-GATr` / `cc_gatr`, based on Brehmer et al., 2023) to regularize noisy world geometry, infer state transition rules, and couple semantic descriptions via $\text{Pin}(3,0,1)$-equivariant multi-head attention. `HolonEngine` deliberately drops `Active-GATr` in favor of closed-form Clifford algebra and spectral operators, which solve all three problems deterministically without neural weights, training datasets, or attention-layer overhead:
+
+1. **CFT Bragg Peaks & Manhattan Projection vs. Learned Lattice Regularization:**
+   * **Problem:** Discovering whether a world obeys a periodic tile lattice or orthogonal wall alignment, and snapping noisy video contours to that structure.
+   * **Why Closed-Form Is Superior:** A transformer network requires learned weights to approximate geometric regularity that is already exact in the frequency domain. 2D CFT Bragg peaks recover the exact spatial period $(\lambda_x, \lambda_y)$ in a single $O(N \log N)$ FFT pass, and `pga::snap_manhattan_plane` (`crates/cc_math/src/pga.rs`) projects 3D plane normals onto orthogonal axes ($\langle \hat{\mathbf{n}}_i, \hat{\mathbf{n}}_j \rangle \in \{0, \pm 1\}$) in $O(1)$ closed-form arithmetic.
+2. **Empirical PGA Incidence vs. Attention-Based State Transition Binding:**
+   * **Problem:** Determining which geometric contacts (stomping an enemy from above, striking a suspended block from below, rebounding off a wall) trigger discrete state transitions $T_{s \to s'} = \epsilon_{s'} M \epsilon_s$.
+   * **Why Closed-Form Is Superior:** In physical gameplay footage, a state transition is a conservation event where a trajectory's Bohm momentum $\mathbf{P}_B$ experiences a sharp discontinuity ($\Delta \mathbf{P}_B$) at the exact frame of projective boundary contact ($P_i \wedge B_j = 0$). Observing these empirical incidences directly during `enfold` (`BoundaryBlade` in `crates/cc_field/src/model2d.rs`) yields exact, verifiable transition operators without soft attention probabilities.
+3. **Bilinear Spinor Inner Products vs. Transformer Cross-Attention:**
+   * **Problem:** Maintaining actor identity across multi-body crossing occlusions and binding optional wording-space rules (`rules.md`) to visual holons.
+   * **Why Closed-Form Is Superior:** Projecting chromatic or wording-space Gram matrices via thin SVD into $\mathbb{G}_{2,0}^+$ spinors allows identity and rule coupling to be evaluated as a single bilinear inner product $\langle \psi_i, \widetilde{\psi}_j \rangle_0 \in [0, 1]$ (`CliffordDensityElement::signature_coherence`), achieving zero-latency deterministic matching.
+
+### 5.3 Empirical Systems Laws Discovered from Benchmark Unfoldment
+* **High-Level Overview:** Compiling playable worlds directly from raw video exposes subtle failure modes where pixel discrete sampling, sprite outlines, and temporal averaging interact with continuous physics. The following seven empirical laws govern `HolonEngine`'s extraction and runtime pipelines:
 
 1. **The Quantization Phantom Trap (1-Pixel Outline Bleed):**
    * **Phenomenon:** Sprite and block artwork frequently includes a 1-pixel dark outline outside the nominal geometry (e.g., `x = 175..208` around a `176..207` block). Naive cell-overlap predicates (`tx1 >= c.x0 && tx0 <= c.x1`) promote the entire adjacent empty-space tile (`16 px` wide) into a solid/one-way surface, creating invisible phantom ledges in open air that premature jumps collide with.
@@ -235,6 +258,8 @@ In accordance with `docs/holon_philosophy.md` (§II–§III), the fundamental re
 
 ## 6. Bonus: Future Work — Extending Implicate Compilation to 3D Worlds
 
+* **High-Level Overview:** Because `HolonEngine` represents all geometry in 3D Projective Geometric Algebra ($\mathbb{G}_{3,0,1}$), a 2D side-scroller and a 3D first-person corridor game (such as *Wolfenstein 3D*) do not require separate mathematical engines. They differ only in how the camera moves through space: a 2D orthographic camera slides parallel to the image plane (producing uniform pixel flow with zero radial expansion), whereas a 3D perspective camera translates forward into the scene while rotating horizontally (producing radial optical flow expanding outward from the horizon).
+
 In $\mathbb{G}_{3,0,1}$, 2D orthographic worlds and 3D perspective corridor worlds share the same projective geometric algebra, distinguished only by the camera `Motor` subgroup detected from CFT optical-flow divergence ($\nabla \cdot \mathbf{v}_{\text{flow}}$):
 * **Orthographic 2D (`Ortho2D`, $\nabla \cdot \mathbf{v}_{\text{flow}} \approx 0$):** Pure translational camera motor (`pga::integrate_2d_camera`):
   $$M_{\text{ego}}(t) = \exp\left(-\frac{1}{2}(v_x e_{01} + v_y e_{02})\Delta t\right)$$
@@ -242,6 +267,8 @@ In $\mathbb{G}_{3,0,1}$, 2D orthographic worlds and 3D perspective corridor worl
   $$M_{\text{ego}}(t) = \exp\left(\frac{1}{2}\Omega \Delta t\, e_{12}\right)\exp\left(-\frac{1}{2}v_{\text{fwd}} \Delta t\, e_{01}\right) \in \text{Spin}(3,0,1)$$
 
 ### 6.1 Four-Stage Projectively Rectified CFT for 3D Enfoldment
+* **High-Level Overview:** In a 3D first-person view, walls closer to the camera appear taller on screen than distant walls ($h(x) \propto 1/z(x)$). Because of this perspective scaling, a standard 2D FFT across the whole screen fails. Instead, the 3D compiler analyzes each vertical pixel column relative to the horizon line to measure wall depth, stitches those depth columns into 3D wall planes as the player walks forward, and unwarps moving enemy sprites into flat canonical rest frames.
+
 A naive global 2D FFT across a perspective viewport fails because perspective projection ($y_{\text{screen}} \propto H / z$) chirps spatial frequencies from the horizon to the screen edge, and actor translation smears sprite spectra. Extending `cc enfold` to 3D corridor worlds replaces global 2D FFT registration with a four-stage **projectively rectified CFT**:
 
 1. **Screen-Locked HUD & Weapon Overlay Isolation (Temporal Phase Variance):**
@@ -256,6 +283,8 @@ A naive global 2D FFT across a perspective viewport fails because perspective pr
    Independent moving entities (guards, projectiles) have their foot depth $z_i(t)$ estimated from projective intersection with $\Pi_{\text{floor}}$. Each actor crop is unwarped into a canonical $64 \times 64$ rest frame before computing its 2D+t CFT kernel $\hat{K}_i(\mathbf{k}, \omega)$—separating spatial silhouette/albedo ($\mathbf{k}$) from periodic walk/attack harmonics ($\omega$) conditioned on relative viewing angle. Discrete behavioral states (patrol, alert, attack, pain, dead; door closed/sliding/open) map to primitive idempotents ($\epsilon_s^2 = \epsilon_s$) connected by transition operators $T_{s \to s'} = \epsilon_{s'} M \epsilon_s$.
 
 ### 6.2 3D Projective Incidence, Raycasting, & Active Information Navigation
+* **High-Level Overview:** Once the 3D wall planes and actor sprites are compiled, the runtime renders and simulates the 3D world using the same algebraic primitives as 2D. Camera rays and weapon shots find wall intersections via the PGA meet operator ($\vee$), enemy line-of-sight is a straight line joining two points ($P_{\text{player}} \vee P_{\text{enemy}}$) checked against wall planes, and enemies navigate 3D corridors using the same $\mathcal{Q}_{\text{Cl}}$ potential field without navmeshes.
+
 The core 3D geometric primitives are already verified in `crates/cc_math/src/pga.rs` (`ray_hit_plane`, `ray_hit_plane_pga`, `plane_through_point`, `snap_manhattan_plane`, `integrate_3d_ego`). In a full 3D `cc unfold` runtime, interaction and rendering operate directly in $\mathbb{G}_{3,0,1}$:
 
 * **PGA Ray-Plane Intersection & Line-of-Sight:** Viewport columns and weapon rays intersect wall and door `Plane`s via the PGA regressive product (`Line::antiwedge(ray, plane)`). Actor line-of-sight is evaluated via the join $L_{\text{los}} = P_{\text{player}} \vee P_{\text{enemy}}$ and tested for wall occlusion via $L_{\text{los}} \wedge \Pi_{\text{wall}}$, while sliding doors translate along their PGA `Line` hinge/rail axes.
