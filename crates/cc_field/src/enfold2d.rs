@@ -2577,9 +2577,14 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         }
         let mut dil_hud = vec![false; vw * vh_play];
         for y in 0..vh_play {
-            let rx_span = if y < 20 || y + 20 >= vh_play { 12i32 } else { 2i32 };
             for x in 0..vw {
                 if raw_hud[y * vw + x] {
+                    let rx_span =
+                        if (y < 20 || y + 20 >= vh_play) && x >= 24 && x + 24 < vw {
+                            12i32
+                        } else {
+                            2i32
+                        };
                     for dy in -2i32..=2 {
                         for dx in -rx_span..=rx_span {
                             let nx = x as i32 + dx;
@@ -2626,7 +2631,11 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
                         }
                     }
                 }
-                hud_rects.push(r.expand(8));
+                if is_edge_bar {
+                    hud_rects.push(r.expand(2));
+                } else {
+                    hud_rects.push(r.expand(5));
+                }
             }
             screen_hud_overlay = Some(overlay);
         }
@@ -3215,11 +3224,11 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
                             sq_rgba[idx * 4 + 2] = dom_c[2];
                             if dx >= 0.4 && dy <= dx * 0.55 + 0.45 {
                                 // Inner leading-edge aperture (opens first -> half-open + wide-open)
-                                sq_rgba[idx * 4 + 3] = 122;
+                                sq_rgba[idx * 4 + 3] = 44;
                                 sq_harm[idx * 4 + 3] = 224;
                             } else if dx >= 0.4 && dy <= dx * 0.95 + 0.55 {
                                 // Outer leading-edge aperture jaws (opens at wide-open peak)
-                                sq_rgba[idx * 4 + 3] = 152;
+                                sq_rgba[idx * 4 + 3] = 112;
                                 sq_harm[idx * 4 + 3] = 224;
                             } else {
                                 sq_rgba[idx * 4 + 3] = 255;
