@@ -499,7 +499,11 @@ impl WorldState2D {
             } else {
                 t.spawn[0] as f32
             };
-            let amp_y = (t.span[1].max(16)) as f32;
+            let amp_y = if vertical_mode {
+                (t.span[1].max(16)) as f32
+            } else {
+                t.span[1] as f32
+            };
             let mut bounds_y = [t.spawn[1] as f32 - amp_y, t.spawn[1] as f32];
             let spawn_y = if vertical_corridor {
                 -50.0 - (auto_idx as f32) * 45.0
@@ -906,8 +910,13 @@ impl WorldState2D {
                     continue;
                 }
                 let vx = vx_f64 as f32;
+                let amp_y = (a.bounds_y[1] - a.bounds_y[0]).max(0.0);
                 a.pos[0] += vx;
-                a.phase += vx.abs() * 0.35;
+                a.phase += if amp_y >= 18.0 {
+                    vx.abs() * 0.75
+                } else {
+                    vx.abs() * 0.35
+                };
 
                 // Surface support coupling resolved before lateral wall probe so
                 // actors on raised terrain steps never probe into the step below them.
@@ -920,7 +929,7 @@ impl WorldState2D {
                         && (center_x as i32) <= b.blade.rect[2]
                     {
                         let top = b.blade.rect[1] as f32;
-                        if feet >= top - 8.0 && feet <= top + 24.0 {
+                        if feet >= top - (8.0 + amp_y) && feet <= top + 24.0 {
                             surface_top = Some(surface_top.map_or(top, |t| t.min(top)));
                         }
                     }
@@ -932,14 +941,19 @@ impl WorldState2D {
                             && (center_x as i32) <= b.blade.rect[2]
                         {
                             let top = b.blade.rect[1] as f32;
-                            if feet >= top - 8.0 && feet <= top + 16.0 {
+                            if feet >= top - (8.0 + amp_y) && feet <= top + 16.0 {
                                 surface_top = Some(surface_top.map_or(top, |t| t.min(top)));
                             }
                         }
                     }
                 }
                 if let Some(top) = surface_top {
-                    a.pos[1] = top - a.size[1];
+                    let hop_dy = if amp_y >= 18.0 {
+                        (amp_y * 0.55) * (a.phase * 0.40).sin().abs()
+                    } else {
+                        0.0
+                    };
+                    a.pos[1] = (top - a.size[1]) - hop_dy;
                 }
 
                 let check_x = if vx > 0.0 {
@@ -960,9 +974,10 @@ impl WorldState2D {
                 // [Primitive State Idempotents & Incidence Transitions: Top-Down Incidence / Collapse]
                 // (P_player ∧ L_actor_top = 0 with v_y > 0)
                 let p_feet = py + ph;
+                let stomp_band = (a.size[1] * 0.55).max(8.0);
                 if pvy > 0.0
                     && p_feet >= a.pos[1]
-                    && prev_primary_feet <= a.pos[1] + 6.0
+                    && prev_primary_feet <= a.pos[1] + stomp_band
                     && (px + pw) > a.pos[0]
                     && px < (a.pos[0] + a.size[0])
                 {
@@ -974,7 +989,7 @@ impl WorldState2D {
             }
             if bounce_player {
                 if let Some(p) = self.holons.first_mut() {
-                    p.vel[1] = -launch_impulse * 0.75;
+                    p.vel[1] = -launch_impulse * 0.90;
                 }
             }
             self.impacts += new_impacts;

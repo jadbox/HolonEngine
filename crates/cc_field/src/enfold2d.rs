@@ -1433,7 +1433,13 @@ pub fn track_actors_coherent(
     // Spinor-coherent fragment unification: merge non-overlapping track fragments
     // sharing the same chromatic spinor signature and compatible size.
     closed.sort_by_key(|t| std::cmp::Reverse(t.boxes.len()));
-    let all_moving = closed.clone();
+    let mut all_moving = closed.clone();
+    if !is_static && !scroll_is_trivial {
+        all_moving.retain(|t| {
+            let (dx, dy) = world_span(t);
+            dx >= 20.0 || dy >= 20.0
+        });
+    }
     let mut merged: Vec<ActorTrack> = Vec::new();
     for t in closed {
         let (tw, th) = t.median_size();
@@ -2131,7 +2137,7 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
                         if med < ground_limit {
                             let rx0 = run[0] as i32;
                             let rx1 = *run.last().unwrap() as i32;
-                            boxes.push(Rect::new(rx0, med, rx1, med + TILE as i32));
+                            boxes.push(Rect::new(rx0, med, rx1, med + TILE as i32 - 1));
                             let ty = ((med - origin_y).max(0) as usize) / TILE;
                             if ty < rows {
                                 for tx in 0..cols {
@@ -2189,13 +2195,61 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
         if flat < opts.min_flat {
             continue;
         }
-        boxes.push(c);
+        let mut tx0_trim = cx0;
+        let mut tx1_trim = cx1;
+        let col_min = ((cy1 - cy0 + 1) / 2).max(2);
+        while tx0_trim < tx1_trim {
+            let cnt = (cy0..=cy1).filter(|&y| mask[y * w + tx0_trim]).count();
+            if cnt < col_min {
+                tx0_trim += 1;
+            } else {
+                break;
+            }
+        }
+        while tx1_trim > tx0_trim {
+            let cnt = (cy0..=cy1).filter(|&y| mask[y * w + tx1_trim]).count();
+            if cnt < col_min {
+                tx1_trim -= 1;
+            } else {
+                break;
+            }
+        }
+        let mut ty0_trim = (med as usize).clamp(cy0, cy1);
+        let mut ty1_trim = cy1;
+        let row_min = ((tx1_trim - tx0_trim + 1) / 2).max(2);
+        while ty0_trim < ty1_trim {
+            let cnt = (tx0_trim..=tx1_trim)
+                .filter(|&x| mask[ty0_trim * w + x])
+                .count();
+            if cnt < row_min {
+                ty0_trim += 1;
+            } else {
+                break;
+            }
+        }
+        while ty1_trim > ty0_trim {
+            let cnt = (tx0_trim..=tx1_trim)
+                .filter(|&x| mask[ty1_trim * w + x])
+                .count();
+            if cnt < row_min {
+                ty1_trim -= 1;
+            } else {
+                break;
+            }
+        }
+        let tight_c = Rect::new(
+            tx0_trim as i32,
+            ty0_trim as i32,
+            tx1_trim as i32,
+            ty1_trim as i32,
+        );
+        boxes.push(tight_c);
         let ty = ((med - origin_y).max(0) as usize) / TILE;
         if ty < rows {
             for tx in 0..cols {
                 let tx0 = (tx * TILE) as i32;
                 let tx1 = tx0 + TILE as i32 - 1;
-                if tx1.min(c.x1) - tx0.max(c.x0) + 1 >= 4 {
+                if tx1.min(tight_c.x1) - tx0.max(tight_c.x0) + 1 >= 4 {
                     kinds[ty * cols + tx] = TileKind::OneWay;
                 }
             }
@@ -2235,14 +2289,15 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
         }
     }
 
-    // Merge horizontal tile runs into collision rects.
+    // Merge horizontal solid terrain runs into collision rects, while keeping
+    // the exact continuous world-space boundary rects `boxes` for one-way platforms
+    // so `platforms` and `boxes` are unified without grid-quantization offset.
     let mut solids = Vec::new();
-    let mut platforms = Vec::new();
     for ty in 0..rows {
         let mut tx = 0;
         while tx < cols {
             let k = kinds[ty * cols + tx];
-            if k != TileKind::Solid && k != TileKind::OneWay {
+            if k != TileKind::Solid {
                 tx += 1;
                 continue;
             }
@@ -2253,15 +2308,11 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
             let y0 = origin_y + ty as i32 * TILE as i32;
             let x0 = (start * TILE) as i32;
             let x1 = ((tx * TILE + TILE - 1) as i32).min(w as i32 - 1);
-            let r = Rect::new(x0, y0, x1, y0 + TILE as i32 - 1);
-            if k == TileKind::Solid {
-                solids.push(r);
-            } else {
-                platforms.push(r);
-            }
+            solids.push(Rect::new(x0, y0, x1, y0 + TILE as i32 - 1));
             tx += 1;
         }
     }
+    let platforms = boxes.clone();
 
     TileExtraction {
         cols,
@@ -2455,19 +2506,36 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         return Err(io::Error::other(format!("bad HUD partition: top = {hud_top}")));
     }
 
-    // Pass 1: scroll + plain atlas + screen-space optical-flow HUD accumulator.
+    // Pass 1: scroll + plain atlas + coordinate-free viewport process coherence.
     let vw = info.width as usize;
     let vh_play = hud_top.min(info.height as usize);
-    let mut screen_buckets: Vec<Bucket> = if !is_static && hud_top == info.height as usize {
+    let track_viewport_coherence = !is_static && hud_top == info.height as usize;
+    let mut screen_buckets: Vec<Bucket> = if track_viewport_coherence {
         vec![Bucket::default(); vw * vh_play]
     } else {
         Vec::new()
     };
-    let mut early_screen_buckets: Vec<Bucket> = if !is_static && hud_top == info.height as usize {
+    let mut init_screen_buckets: Vec<Bucket> = if track_viewport_coherence {
         vec![Bucket::default(); vw * vh_play]
     } else {
         Vec::new()
     };
+    let mut coh_hits_a: Vec<u16> = if track_viewport_coherence {
+        vec![0u16; vw * vh_play]
+    } else {
+        Vec::new()
+    };
+    let mut coh_hits_b: Vec<u16> = if track_viewport_coherence {
+        vec![0u16; vw * vh_play]
+    } else {
+        Vec::new()
+    };
+    let mut prev_frame_rgb: Vec<u8> = Vec::new();
+    let mut scroll_steps_a = 0usize;
+    let mut scroll_steps_b = 0usize;
+    let est_total_frames = ((duration * fps.max(1.0)).round() as usize).max(2);
+    let half_frame_mark = est_total_frames / 2;
+
     let mut reader = video_io::FrameReader::open_range(path, Some(start), Some(duration))?;
     let mut est = ScrollEstimator::new(vw, hud_top);
     let mut acc = AtlasAccumulator::new(hud_top);
@@ -2489,18 +2557,104 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
             cum[1] += d[1];
             scroll.push(cum);
             acc.add_frame(&frame, cum, &[]);
-            if !screen_buckets.is_empty() {
-                for y in 0..vh_play.min(frame.height as usize) {
+            if track_viewport_coherence {
+                let h_lim = vh_play.min(frame.height as usize);
+                let w_lim = vw.min(frame.width as usize);
+                for y in 0..h_lim {
                     let row_off = y * vw;
-                    for x in 0..vw.min(frame.width as usize) {
+                    for x in 0..w_lim {
                         let i = (row_off + x) * 3;
                         let rgb = [frame.rgb[i], frame.rgb[i + 1], frame.rgb[i + 2]];
                         screen_buckets[row_off + x].add(rgb);
                         if frame_idx < 8 {
-                            early_screen_buckets[row_off + x].add(rgb);
+                            init_screen_buckets[row_off + x].add(rgb);
                         }
                     }
                 }
+                if !prev_frame_rgb.is_empty() && (d[0] != 0 || d[1] != 0) {
+                    let second_half = frame_idx >= half_frame_mark;
+                    if second_half {
+                        scroll_steps_b += 1;
+                    } else {
+                        scroll_steps_a += 1;
+                    }
+                    let mut g_par = vec![0i32; vw * vh_play];
+                    let mut g_max = vec![0i32; vw * vh_play];
+                    for y in 0..h_lim {
+                        let row_off = y * vw;
+                        for x in 0..w_lim {
+                            let i = (row_off + x) * 3;
+                            let c = [frame.rgb[i], frame.rgb[i + 1], frame.rgb[i + 2]];
+                            let mut gx = 0i32;
+                            let mut gy = 0i32;
+                            if x > 0 {
+                                let p = i - 3;
+                                gx = gx.max(color_dist(
+                                    c,
+                                    [frame.rgb[p], frame.rgb[p + 1], frame.rgb[p + 2]],
+                                ));
+                            }
+                            if x + 1 < w_lim {
+                                let p = i + 3;
+                                gx = gx.max(color_dist(
+                                    c,
+                                    [frame.rgb[p], frame.rgb[p + 1], frame.rgb[p + 2]],
+                                ));
+                            }
+                            if y > 0 {
+                                let p = i - vw * 3;
+                                gy = gy.max(color_dist(
+                                    c,
+                                    [frame.rgb[p], frame.rgb[p + 1], frame.rgb[p + 2]],
+                                ));
+                            }
+                            if y + 1 < h_lim {
+                                let p = i + vw * 3;
+                                gy = gy.max(color_dist(
+                                    c,
+                                    [frame.rgb[p], frame.rgb[p + 1], frame.rgb[p + 2]],
+                                ));
+                            }
+                            let gp = (if d[0] != 0 { gx } else { 0 })
+                                .max(if d[1] != 0 { gy } else { 0 });
+                            g_par[row_off + x] = gp;
+                            g_max[row_off + x] = gx.max(gy);
+                        }
+                    }
+                    for y in 0..h_lim {
+                        let row_off = y * vw;
+                        for x in 0..w_lim {
+                            let idx_p = row_off + x;
+                            let i = idx_p * 3;
+                            let c = [frame.rgb[i], frame.rgb[i + 1], frame.rgb[i + 2]];
+                            let prev_c = [
+                                prev_frame_rgb[i],
+                                prev_frame_rgb[i + 1],
+                                prev_frame_rgb[i + 2],
+                            ];
+                            let dt = color_dist(c, prev_c);
+                            if dt <= 8 && g_max[idx_p] > 18 {
+                                let mut gp_3x3 = 0i32;
+                                for dy_k in -1i32..=1 {
+                                    for dx_k in -1i32..=1 {
+                                        let nx = (x as i32 + dx_k).clamp(0, w_lim as i32 - 1) as usize;
+                                        let ny = (y as i32 + dy_k).clamp(0, h_lim as i32 - 1) as usize;
+                                        gp_3x3 = gp_3x3.max(g_par[ny * vw + nx]);
+                                    }
+                                }
+                                if gp_3x3 > 10 {
+                                    if second_half {
+                                        coh_hits_b[idx_p] = coh_hits_b[idx_p].saturating_add(1);
+                                    } else {
+                                        coh_hits_a[idx_p] = coh_hits_a[idx_p].saturating_add(1);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                prev_frame_rgb.clear();
+                prev_frame_rgb.extend_from_slice(&frame.rgb);
             }
         }
         frame_idx += 1;
@@ -2512,81 +2666,28 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
     let plain_atlas = acc.to_atlas();
     let plain_bg = learn_background(&plain_atlas.image);
 
-    // Optical-flow viewport HUD isolation: in a scrolling regime (`!is_static`)
-    // where HUD widgets float over the viewport (`hud_top == info.height`),
-    // scrolling world texture blurs out in the screen-space temporal mode M_screen,
-    // whereas stationary viewport-locked HUD elements preserve sharp spatial gradients
-    // (||grad M_screen||_inf > 28) with high temporal support (>= 40% of frames).
+    // Viewport-Coherent Holon Isolation (zero coordinate conditionals):
+    // Any localized process that reproduces itself in the viewport frame
+    // (||I_t(x, y) - I_{t-1}(x, y)||_inf <= 8) while carrying spatial gradient
+    // along the active camera flow (G_par > 10, ||grad I_t||_inf > 18) across both
+    // halves of the observation stream is a viewport-locked holon.
     let mut hud_rects: Vec<Rect> = Vec::new();
     let mut screen_hud_overlay: Option<RgbImage8> = None;
-    if !screen_buckets.is_empty() && n_frames >= 16 {
-        let mut screen_mode = vec![([0u8; 3], 0u32); vw * vh_play];
-        let mut early_mode = vec![([0u8; 3], 0u32); vw * vh_play];
-        for (i, b) in screen_buckets.iter().enumerate() {
-            if let Some(mc) = b.mode() {
-                screen_mode[i] = mc;
-            }
-        }
-        for (i, b) in early_screen_buckets.iter().enumerate() {
-            if let Some(mc) = b.mode() {
-                early_mode[i] = mc;
-            }
-        }
+    if track_viewport_coherence && scroll_steps_a >= 6 && scroll_steps_b >= 6 {
+        let min_a = ((scroll_steps_a * 9) / 20).max(3) as u16;
+        let min_b = ((scroll_steps_b * 9) / 20).max(3) as u16;
         let mut raw_hud = vec![false; vw * vh_play];
-        let min_support = ((n_frames * 2) / 5) as u32;
-        let early_n = n_frames.min(8) as u32;
-        let min_early_support = ((early_n * 3) / 4).max(3);
-        for y in 0..vh_play {
-            let in_perim_y = y < 24 || y + 20 >= vh_play;
-            for x in 0..vw {
-                let in_perim_x = x < 16 || x + 16 >= vw;
-                if !in_perim_y && !in_perim_x {
-                    continue;
-                }
-                let idx_p = y * vw + x;
-                let (c, cnt) = screen_mode[idx_p];
-                let (ec, ecnt) = early_mode[idx_p];
-                let mut max_g = 0i32;
-                let mut early_g = 0i32;
-                if x > 0 {
-                    max_g = max_g.max(color_dist(c, screen_mode[idx_p - 1].0));
-                    early_g = early_g.max(color_dist(ec, early_mode[idx_p - 1].0));
-                }
-                if x + 1 < vw {
-                    max_g = max_g.max(color_dist(c, screen_mode[idx_p + 1].0));
-                    early_g = early_g.max(color_dist(ec, early_mode[idx_p + 1].0));
-                }
-                if y > 0 {
-                    max_g = max_g.max(color_dist(c, screen_mode[idx_p - vw].0));
-                    early_g = early_g.max(color_dist(ec, early_mode[idx_p - vw].0));
-                }
-                if y + 1 < vh_play {
-                    max_g = max_g.max(color_dist(c, screen_mode[idx_p + vw].0));
-                    early_g = early_g.max(color_dist(ec, early_mode[idx_p + vw].0));
-                }
-                let static_ok = cnt >= min_support && max_g > 28;
-                let counter_ok = in_perim_y
-                    && ecnt >= min_early_support
-                    && early_g > 28
-                    && color_dist(ec, plain_bg) > 28
-                    && color_dist(c, plain_bg) > 24;
-                if static_ok || counter_ok {
-                    raw_hud[idx_p] = true;
-                }
+        for idx_p in 0..(vw * vh_play) {
+            if coh_hits_a[idx_p] >= min_a && coh_hits_b[idx_p] >= min_b {
+                raw_hud[idx_p] = true;
             }
         }
         let mut dil_hud = vec![false; vw * vh_play];
         for y in 0..vh_play {
             for x in 0..vw {
                 if raw_hud[y * vw + x] {
-                    let rx_span =
-                        if (y < 20 || y + 20 >= vh_play) && x >= 24 && x + 24 < vw {
-                            12i32
-                        } else {
-                            2i32
-                        };
                     for dy in -2i32..=2 {
-                        for dx in -rx_span..=rx_span {
+                        for dx in -2i32..=2 {
                             let nx = x as i32 + dx;
                             let ny = y as i32 + dy;
                             if nx >= 0 && nx < vw as i32 && ny >= 0 && ny < vh_play as i32 {
@@ -2597,45 +2698,30 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
                 }
             }
         }
-        let mut comps = connected_boxes_xy(&dil_hud, vw, vh_play, 40);
-        for r in &mut comps {
-            if (r.x1 >= vw as i32 - 4 || r.x0 <= 3) && r.height() as usize >= vh_play / 3 {
-                r.y0 = 0;
-                r.y1 = vh_play as i32 - 1;
-            }
-        }
+        let comps = connected_boxes_xy(&dil_hud, vw, vh_play, 30);
         if !comps.is_empty() {
             let mut overlay = RgbImage8::new(vw, vh_play);
             for r in &comps {
-                let rx0 = r.x0.max(0) as usize;
-                let ry0 = r.y0.max(0) as usize;
-                let rx1 = (r.x1.max(0) as usize).min(vw - 1);
-                let ry1 = (r.y1.max(0) as usize).min(vh_play - 1);
-                let is_edge_bar =
-                    (r.x1 >= vw as i32 - 4 || r.x0 <= 3) && r.height() as usize >= vh_play / 2;
-                let is_top_counter = r.y0 <= 8 && r.width() >= 32;
+                let bound = r.expand(1);
+                let rx0 = bound.x0.max(0) as usize;
+                let ry0 = bound.y0.max(0) as usize;
+                let rx1 = (bound.x1.max(0) as usize).min(vw - 1);
+                let ry1 = (bound.y1.max(0) as usize).min(vh_play - 1);
                 for y in ry0..=ry1 {
                     for x in rx0..=rx1 {
-                        if dil_hud[y * vw + x] || is_edge_bar {
-                            let (ec, _) = early_mode[y * vw + x];
-                            let (sc, _) = screen_mode[y * vw + x];
-                            let c = if is_top_counter && color_dist(ec, plain_bg) > 26 {
-                                ec
-                            } else {
-                                sc
-                            };
-                            if color_dist(c, plain_bg) > 26 {
-                                let out_c = if c == [0, 0, 0] { [1, 1, 1] } else { c };
-                                overlay.set_pixel(x, y, out_c);
-                            }
+                        let idx_p = y * vw + x;
+                        let ec = init_screen_buckets[idx_p]
+                            .mode()
+                            .or_else(|| screen_buckets[idx_p].mode())
+                            .map(|m| m.0)
+                            .unwrap_or([0, 0, 0]);
+                        if color_dist(ec, plain_bg) > 24 {
+                            let out_c = if ec == [0, 0, 0] { [1, 1, 1] } else { ec };
+                            overlay.set_pixel(x, y, out_c);
                         }
                     }
                 }
-                if is_edge_bar {
-                    hud_rects.push(r.expand(2));
-                } else {
-                    hud_rects.push(r.expand(5));
-                }
+                hud_rects.push(r.expand(3));
             }
             screen_hud_overlay = Some(overlay);
         }
@@ -2763,6 +2849,7 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
     let mut acc2 = AtlasAccumulator::new(hud_top);
     #[derive(Clone)]
     struct TrackPatch {
+        fi: usize,
         off: [i32; 2],
         orig: Rect,
         pad: Rect,
@@ -2824,6 +2911,7 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
                 }
             }
             track_patches[ti].push(TrackPatch {
+                fi: idx,
                 off,
                 orig: b,
                 pad,
@@ -2930,14 +3018,20 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         ws.sort_unstable();
         hs.sort_unstable();
         let tw = ws[ws.len() / 2].clamp(6, 48) as usize;
-        let th = hs[hs.len() / 2].clamp(6, 48) as usize;
+        let h_spread = hs.last().copied().unwrap_or(0) - hs.first().copied().unwrap_or(0);
+        let th_idx = if !is_static && h_spread >= 5 {
+            (hs.len() * 3 / 4).min(hs.len() - 1)
+        } else {
+            hs.len() / 2
+        };
+        let th = hs[th_idx].clamp(6, 48) as usize;
 
         let mut candidates: Vec<&TightObs> = tight_list
             .iter()
             .filter(|o| {
                 let cw = o.tx1 - o.tx0 + 1;
                 let ch = o.ty1 - o.ty0 + 1;
-                (cw - tw as i32).abs() <= 5 && (ch - th as i32).abs() <= 5
+                (cw - tw as i32).abs() <= 6 && (ch - th as i32).abs() <= 8
             })
             .collect();
         if candidates.is_empty() {
@@ -2981,6 +3075,13 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
             (c, is_fg)
         };
 
+        let mut cand_hs: Vec<i32> = candidates.iter().map(|o| o.ty1 - o.ty0 + 1).collect();
+        cand_hs.sort_unstable();
+        let cand_h_spread =
+            cand_hs.last().copied().unwrap_or(0) - cand_hs.first().copied().unwrap_or(0);
+        let bottom_anchor = !is_static && cand_h_spread >= 5 && th >= 20;
+        let med_cand_h = cand_hs[cand_hs.len() / 2];
+
         // Choose cleanest reference observation for +-2 px translational registration
         let ref_obs = *candidates
             .iter()
@@ -2993,7 +3094,11 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
             .unwrap();
         let ref_p = &track_patches[ti][ref_obs.patch_idx];
         let ref_x0 = (ref_obs.tx0 + ref_obs.tx1 + 1 - tw as i32) / 2;
-        let ref_y0 = (ref_obs.ty0 + ref_obs.ty1 + 1 - th as i32) / 2;
+        let ref_y0 = if bottom_anchor {
+            ref_obs.ty1 - th as i32 + 1
+        } else {
+            (ref_obs.ty0 + ref_obs.ty1 + 1 - th as i32) / 2
+        };
         let mut ref_rgb = vec![[0u8; 3]; tw * th];
         let mut ref_mask = vec![false; tw * th];
         for sy in 0..th {
@@ -3018,13 +3123,19 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         for obs in &candidates {
             let p = &track_patches[ti][obs.patch_idx];
             let base_x0 = (obs.tx0 + obs.tx1 + 1 - tw as i32) / 2;
-            let base_y0 = (obs.ty0 + obs.ty1 + 1 - th as i32) / 2;
+            let base_y0 = if bottom_anchor {
+                obs.ty1 - th as i32 + 1
+            } else {
+                (obs.ty0 + obs.ty1 + 1 - th as i32) / 2
+            };
             let mut best_shift = (0i32, 0i32);
             let mut best_cost = i64::MAX;
-            for dy in -2..=2 {
+            let dy_range = if bottom_anchor { -1..=1 } else { -2..=2 };
+            let sy_start = if bottom_anchor { th / 3 } else { 0 };
+            for dy in dy_range {
                 for dx in -2..=2 {
                     let mut cost = 0i64;
-                    for sy in 0..th {
+                    for sy in sy_start..th {
                         for sx in 0..tw {
                             let idx_s = sy * tw + sx;
                             let (c, fg) =
@@ -3046,7 +3157,12 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
                     }
                 }
             }
-            let phase_pos = ((total / 4) % 2) == 0;
+            let obs_h = obs.ty1 - obs.ty0 + 1;
+            let phase_pos = if bottom_anchor {
+                obs_h >= med_cand_h
+            } else {
+                ((total / 4) % 2) == 0
+            };
             total += 1;
             if phase_pos {
                 total_pos += 1;
@@ -3103,7 +3219,12 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
             }
             let (pos_fg, neg_fg) = (alpha_pos[i] >= min_pos, alpha_neg[i] >= min_neg);
             if total_pos >= 2 && total_neg >= 2 && pos_fg != neg_fg {
-                if rgba[i * 4 + 3] == 0 {
+                let inactive_low = if pos_fg {
+                    alpha_neg[i] * 3 <= total_neg
+                } else {
+                    alpha_pos[i] * 3 <= total_pos
+                };
+                if rgba[i * 4 + 3] == 0 || inactive_low {
                     let active_bucket = if pos_fg {
                         &buckets_pos[i]
                     } else {
@@ -3114,11 +3235,11 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
                             rgba[i * 4] = c[0];
                             rgba[i * 4 + 1] = c[1];
                             rgba[i * 4 + 2] = c[2];
-                            rgba[i * 4 + 3] = 160;
+                            rgba[i * 4 + 3] = 112;
                         }
                     }
                 }
-                let da = if pos_fg { 80i32 } else { -80i32 };
+                let da = if pos_fg { 96i32 } else { -96i32 };
                 harmonic_rgba[i * 4 + 3] = (128 + da).clamp(0, 255) as u8;
             }
         }
@@ -3167,15 +3288,17 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
             }
         }
 
-        // Spin(2,0) rotor-steered canonical harmonic restoration for isotropic
-        // chromatically homogeneous planar holons: when a circular holon rotates
-        // across all 4 cardinal directions in a planar arena, unrotated temporal
-        // averaging fills its leading-edge aperture across directions. Restoring
-        // the canonical +e1 leading-edge omega_1 harmonic allows full Spin(2,0)
-        // rotor steering U K_1 ~U along the holon's instantaneous heading vector s.
+        // Spin(2,0) inverse-rotor pullback ~U(t) x U(t) for isotropic chromatically
+        // homogeneous planar holons: when a holon rotates across all 4 cardinal
+        // directions in a planar arena, unrotated temporal averaging blends its
+        // leading-edge aperture across directions. Pulling back each video observation
+        // into the holon's canonical +e1 heading frame via its trajectory displacement
+        // and partitioning observations by foreground occupancy tertiles (open, mid,
+        // closed) extracts the canonical silhouette K_0 and leading-edge harmonic K_1
+        // directly from the video stream without procedural geometry.
         let mut final_w = tw;
         let mut final_h = th;
-        if is_static && (tw as i32 - th as i32).abs() <= 3 {
+        if is_static && (tw as i32 - th as i32).abs() <= 3 && candidates.len() >= 6 {
             let mut fg_count = 0usize;
             let mut dom_bucket = Bucket::default();
             for sy in 0..th {
@@ -3205,39 +3328,117 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
                 && fg_count * 100 / n.max(1) >= 50
             {
                 let side = tw.max(th);
-                final_w = side;
-                final_h = side;
-                let cx = (side as f32 - 1.0) * 0.5;
-                let cy = (side as f32 - 1.0) * 0.5;
-                let rad = side as f32 * 0.5 - 0.15;
-                let mut sq_rgba = vec![0u8; side * side * 4];
-                let mut sq_harm = vec![128u8; side * side * 4];
-                for sy in 0..side {
-                    for sx in 0..side {
-                        let dx = sx as f32 - cx;
-                        let dy = (sy as f32 - cy).abs();
-                        let r = (dx * dx + dy * dy).sqrt();
-                        if r <= rad {
-                            let idx = sy * side + sx;
-                            sq_rgba[idx * 4] = dom_c[0];
-                            sq_rgba[idx * 4 + 1] = dom_c[1];
-                            sq_rgba[idx * 4 + 2] = dom_c[2];
-                            if dx >= 0.4 && dy <= dx * 0.55 + 0.45 {
-                                // Inner leading-edge aperture (opens first -> half-open + wide-open)
-                                sq_rgba[idx * 4 + 3] = 44;
-                                sq_harm[idx * 4 + 3] = 224;
-                            } else if dx >= 0.4 && dy <= dx * 0.95 + 0.55 {
-                                // Outer leading-edge aperture jaws (opens at wide-open peak)
-                                sq_rgba[idx * 4 + 3] = 112;
-                                sq_harm[idx * 4 + 3] = 224;
+                let sq_n = side * side;
+                let mut rot_buckets = vec![Bucket::default(); sq_n];
+                let mut rot_hits = vec![0u32; sq_n];
+                let mut rot_tot = 0u32;
+
+                for obs in &candidates {
+                    let p = &track_patches[ti][obs.patch_idx];
+                    let pos_idx = t
+                        .boxes
+                        .binary_search_by_key(&p.fi, |&(bfi, _)| bfi)
+                        .unwrap_or_else(|e| e.min(t.boxes.len().saturating_sub(1)));
+                    let i0 = pos_idx.saturating_sub(2);
+                    let i1 = (pos_idx + 2).min(t.boxes.len().saturating_sub(1));
+                    if t.boxes[i1].0.saturating_sub(t.boxes[i0].0) > 8 {
+                        continue;
+                    }
+                    let c0 = t.boxes[i0].1.center();
+                    let c1 = t.boxes[i1].1.center();
+                    let vx = c1[0] - c0[0];
+                    let vy = c1[1] - c0[1];
+                    if vx.abs() < 1.5 && vy.abs() < 1.5 {
+                        continue;
+                    }
+                    // Anchor registration to the rigid trailing boundary opposite to the
+                    // heading vector (vx, vy) so leading-edge aperture retraction does not
+                    // shift the canonical coordinate origin.
+                    let (ix0, iy0) = if vx.abs() >= vy.abs() {
+                        let x0 = if vx >= 0.0 {
+                            obs.tx0
+                        } else {
+                            obs.tx1 - side as i32 + 1
+                        };
+                        let y0 = (obs.ty0 + obs.ty1 + 1 - side as i32) / 2;
+                        (x0, y0)
+                    } else {
+                        let x0 = (obs.tx0 + obs.tx1 + 1 - side as i32) / 2;
+                        let y0 = if vy >= 0.0 {
+                            obs.ty0
+                        } else {
+                            obs.ty1 - side as i32 + 1
+                        };
+                        (x0, y0)
+                    };
+                    rot_tot += 2;
+
+                    for sy in 0..side {
+                        for sx in 0..side {
+                            // Pullback canonical +e1 coordinate (sx, sy) to world sample (wx_s, wy_s)
+                            let (wx_s, wy_s) = if vx.abs() >= vy.abs() {
+                                if vx < 0.0 {
+                                    (side - 1 - sx, sy)
+                                } else {
+                                    (sx, sy)
+                                }
+                            } else if vy > 0.0 {
+                                (sy, sx)
                             } else {
-                                sq_rgba[idx * 4 + 3] = 255;
+                                (sy, side - 1 - sx)
+                            };
+                            let (c, fg) =
+                                sample_patch(p, ix0 + wx_s as i32, iy0 + wy_s as i32);
+                            if fg && color_dist(c, dom_c) <= 75 {
+                                let i_a = sy * side + sx;
+                                let i_b = (side - 1 - sy) * side + sx;
+                                rot_buckets[i_a].add(c);
+                                rot_buckets[i_b].add(c);
+                                rot_hits[i_a] += 1;
+                                rot_hits[i_b] += 1;
                             }
                         }
                     }
                 }
-                rgba = sq_rgba;
-                harmonic_rgba = sq_harm;
+
+                if rot_tot >= 8 {
+                    final_w = side;
+                    final_h = side;
+                    let mut occ = vec![0u32; sq_n];
+                    for i in 0..sq_n {
+                        occ[i] = (rot_hits[i] * 100) / rot_tot;
+                    }
+                    let mut sq_rgba = vec![0u8; sq_n * 4];
+                    let mut sq_harm = vec![128u8; sq_n * 4];
+                    for sy in 0..side {
+                        for sx in 0..side {
+                            let i = sy * side + sx;
+                            let mx = side - 1 - sx;
+                            let my = side - 1 - sy;
+                            let d4_max = occ[sy * side + sx]
+                                .max(occ[sy * side + mx])
+                                .max(occ[sx * side + sy])
+                                .max(occ[sx * side + my]);
+                            if d4_max >= 40 {
+                                let c = rot_buckets[i].mode().map(|m| m.0).unwrap_or(dom_c);
+                                sq_rgba[i * 4] = c[0];
+                                sq_rgba[i * 4 + 1] = c[1];
+                                sq_rgba[i * 4 + 2] = c[2];
+                                if sx < side / 2 || occ[i] >= 65 {
+                                    sq_rgba[i * 4 + 3] = 255;
+                                } else if occ[i] >= 36 {
+                                    sq_rgba[i * 4 + 3] = 112;
+                                    sq_harm[i * 4 + 3] = 224;
+                                } else {
+                                    sq_rgba[i * 4 + 3] = 44;
+                                    sq_harm[i * 4 + 3] = 224;
+                                }
+                            }
+                        }
+                    }
+                    rgba = sq_rgba;
+                    harmonic_rgba = sq_harm;
+                }
             }
         }
 
@@ -3288,36 +3489,144 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
     tile_opts.hud_top = hud_top;
     let tiles = extract_2d_tiles_with(&atlas, &tile_opts);
 
-    // Pre-incidence causal restoration for suspended interactive surfaces:
-    // before an actor impacts an overhead block (t < t_hit), the early frames of
-    // the segment record its active initial state (e.g. gleaming block insignia),
-    // whereas the full-segment mode records its post-impact spent state.
+    // Pre-incidence coherent whole-frame restoration for suspended interactive
+    // surfaces: rather than taking a pixel-by-pixel temporal mode across multiple
+    // animation frames (which blurs scrolling/pulsing block insignia such as the
+    // 4-phase `?` marquee), each suspended sub-block selects the single unoccluded
+    // pre-incidence frame whose internal detail is most centrally balanced.
     let mut atlas = atlas;
     if !is_static && tiles.ground_top < atlas.image.height as i32 {
-        let mut init_acc = AtlasAccumulator::new(hud_top);
-        let init_frames = n_frames.min(25);
-        let mut reader = video_io::FrameReader::open_range(path, Some(start), Some(duration))?;
-        let mut f_i = 0usize;
-        while let Some(frame) = reader.next_frame()? {
-            if f_i >= init_frames {
-                break;
-            }
-            let off = refined[f_i];
-            init_acc.add_frame(&frame, off, &[]);
-            f_i += 1;
-        }
-        let init_atlas = init_acc.to_atlas();
+        let mut sub_blocks: Vec<Rect> = Vec::new();
         for p in &tiles.platforms {
-            if p.y1 < tiles.ground_top {
-                for wy in p.y0..=p.y1 {
-                    for wx in p.x0..=p.x1 {
-                        if let Some(c) = init_atlas.pixel(wx, wy) {
-                            if c != [0, 0, 0] && color_dist(c, tiles.background) > 20 {
-                                let ax = (wx - atlas.origin[0]) as usize;
-                                let ay = (wy - atlas.origin[1]) as usize;
-                                if ax < atlas.image.width && ay < atlas.image.height {
-                                    atlas.image.set_pixel(ax, ay, c);
+            if p.y1 < tiles.ground_top - 4 {
+                let y_check = ((p.y1 + 4 - atlas.origin[1]).max(0) as usize)
+                    .min(atlas.image.height.saturating_sub(1));
+                let x_start = (p.x0 - atlas.origin[0]).max(0) as usize;
+                let x_end = ((p.x1 - atlas.origin[0]).max(0) as usize)
+                    .min(atlas.image.width.saturating_sub(1));
+                let mut open_px = 0usize;
+                let mut tot_px = 0usize;
+                for ax in (x_start..=x_end).step_by(2) {
+                    if color_dist(atlas.image.pixel(ax, y_check), tiles.background) <= 28 {
+                        open_px += 1;
+                    }
+                    tot_px += 1;
+                }
+                if tot_px > 0 && open_px * 5 >= tot_px * 3 {
+                    let side = (p.y1 - p.y0 + 1).max(8);
+                    let mut sx = p.x0;
+                    while sx <= p.x1 {
+                        let ex = (sx + side - 1).min(p.x1);
+                        if ex - sx + 1 >= 8 {
+                            sub_blocks.push(Rect::new(sx, p.y0, ex, p.y1));
+                        }
+                        sx += side;
+                    }
+                }
+            }
+        }
+        if !sub_blocks.is_empty() {
+            let mut obs_count = vec![0usize; sub_blocks.len()];
+            let mut best_score = vec![f64::NEG_INFINITY; sub_blocks.len()];
+            let mut best_patch: Vec<Option<Vec<[u8; 3]>>> = vec![None; sub_blocks.len()];
+            let mut reader =
+                video_io::FrameReader::open_range(path, Some(start), Some(duration))?;
+            let mut f_i = 0usize;
+            while let Some(frame) = reader.next_frame()? {
+                if f_i >= n_frames || obs_count.iter().all(|&c| c >= 16) {
+                    break;
+                }
+                let off = refined[f_i];
+                let fw = frame.width as i32;
+                let fh = (hud_top as i32).min(frame.height as i32);
+                for (bi, sb) in sub_blocks.iter().enumerate() {
+                    if obs_count[bi] >= 16 {
+                        continue;
+                    }
+                    let fx0 = sb.x0 - off[0];
+                    let fy0 = sb.y0 - off[1];
+                    let fx1 = sb.x1 - off[0];
+                    let fy1 = sb.y1 - off[1];
+                    if fx0 < 0 || fy0 < 0 || fx1 >= fw || fy1 >= fh {
+                        continue;
+                    }
+                    let f_rect = Rect::new(fx0 - 2, fy0 - 2, fx1 + 2, fy1 + 2);
+                    let occluded = track_at_frame[f_i].iter().any(|&(_, m)| {
+                        !(m.x1 < f_rect.x0
+                            || m.x0 > f_rect.x1
+                            || m.y1 < f_rect.y0
+                            || m.y0 > f_rect.y1)
+                    });
+                    if occluded {
+                        continue;
+                    }
+                    obs_count[bi] += 1;
+                    let bw = (sb.x1 - sb.x0 + 1) as usize;
+                    let bh = (sb.y1 - sb.y0 + 1) as usize;
+                    let mut patch = vec![[0u8; 3]; bw * bh];
+                    let mut fill_bucket = Bucket::default();
+                    for ly in 0..bh {
+                        for lx in 0..bw {
+                            let c = frame.pixel((fx0 + lx as i32) as u32, (fy0 + ly as i32) as u32);
+                            patch[ly * bw + lx] = c;
+                            if lx >= 2 && lx + 2 < bw && ly >= 2 && ly + 2 < bh {
+                                fill_bucket.add(c);
+                            }
+                        }
+                    }
+                    let dom_c = fill_bucket.mode().map(|m| m.0).unwrap_or(tiles.background);
+                    let mut detail_cnt = 0usize;
+                    let mut center_mass = 0usize;
+                    let mut edge_touch = 0usize;
+                    let mut sum_x = 0.0f64;
+                    let x_lo = 2usize.min(bw);
+                    let x_hi = bw.saturating_sub(2);
+                    let y_lo = 3usize.min(bh);
+                    let y_hi = bh.saturating_sub(3).max(y_lo);
+                    for ly in y_lo..y_hi {
+                        for lx in x_lo..x_hi {
+                            let c = patch[ly * bw + lx];
+                            if color_dist(c, dom_c) > 35 {
+                                detail_cnt += 1;
+                                let rx = (lx - x_lo) as f64;
+                                sum_x += rx;
+                                if lx < x_lo + 2 || lx + 2 >= x_hi {
+                                    edge_touch += 1;
+                                } else if lx >= x_lo + 3 && lx + 3 < x_hi {
+                                    center_mass += 1;
                                 }
+                            }
+                        }
+                    }
+                    let score = if detail_cnt >= 6 && x_hi > x_lo + 1 {
+                        let ideal_cx = (x_hi - x_lo - 1) as f64 * 0.5;
+                        let cx = sum_x / detail_cnt as f64;
+                        (center_mass as f64) * 2.0
+                            - (edge_touch as f64) * 3.0
+                            - (cx - ideal_cx).abs() * 10.0
+                    } else {
+                        0.0
+                    };
+                    if score > best_score[bi] {
+                        best_score[bi] = score;
+                        best_patch[bi] = Some(patch);
+                    }
+                }
+                f_i += 1;
+            }
+            for (bi, sb) in sub_blocks.iter().enumerate() {
+                if let Some(patch) = &best_patch[bi] {
+                    let bw = (sb.x1 - sb.x0 + 1) as usize;
+                    let bh = (sb.y1 - sb.y0 + 1) as usize;
+                    for ly in 0..bh {
+                        for lx in 0..bw {
+                            let c = patch[ly * bw + lx];
+                            let wx = sb.x0 + lx as i32;
+                            let wy = sb.y0 + ly as i32;
+                            let ax = (wx - atlas.origin[0]) as usize;
+                            let ay = (wy - atlas.origin[1]) as usize;
+                            if ax < atlas.image.width && ay < atlas.image.height {
+                                atlas.image.set_pixel(ax, ay, c);
                             }
                         }
                     }

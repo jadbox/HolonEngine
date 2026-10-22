@@ -975,7 +975,7 @@ impl Model2D {
                             }
                         }
                     }
-                    if left_active == 0 && right_active >= 6 {
+                    if right_active >= 6 && right_active > left_active * 2 {
                         is_spin_aperture = true;
                     }
                 }
