@@ -67,7 +67,7 @@ cargo build --release
 ## Documentation
 
 - [**Engine Architecture Whitepaper (`docs/holon_whitepaper.md`)**](./docs/holon_whitepaper.md): Mathematical and systems specification of `CliffordDensityElement`, bilinear invariants, quantum torque steering, and tile-free continuous implicate world compilation.
-- [**Holon Philosophy (`docs/holon_philosophy.md`)**](./docs/holon_philosophy.md): The Living Page thesis—Implicate Holons in $\mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$, CFT spectral decomposition, and Active-GATr dynamics.
+- [**Holon Philosophy (`docs/holon_philosophy.md`)**](./docs/holon_philosophy.md): Process ontology of enfoldment/unfoldment, algebraic holons, pregeometry, and Active Information.
 - [**General Ontology (`philosophy.md`)**](https://github.com/jadbox/dzog/blob/main/philosophy.md): Philosophical and physical foundations of relation-first computing over continuous fields.
 - [**Execution Plan & Roadmap (`docs/plan.md`)**](./docs/plan.md): Phased milestones, verification gates, and audit history across 2D and 3D benchmarks.
 

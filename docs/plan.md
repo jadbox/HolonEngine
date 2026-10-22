@@ -21,7 +21,7 @@ Grounded in the [Dzog philosophy](https://github.com/jadbox/dzog/blob/main/philo
 2. **Strict Division of Labor:**
    * **CFT Spectral Extractor (`cc_field`):** Isolates zero-parallax HUD bars, estimates camera `Motor` odometry, separates static world geometry from moving actors, and extracts canonical 2D+t CFT sprite loops.
    * **Semantic Transducer (`llama.cpp` VLM + Embeddings):** Runs only during `cc enfold` (with deterministic `.cc_cache/` JSON fixtures) to label entity types/states and embed `rules.md`.
-   * **Active-GATr (`cc_gatr`):** Snaps geometry to tile/Manhattan lattices and compiles PGA incidence predicates (`StompTop`, `HitBlockBottom`, `UseDoor`, `LineOfSight`, `RayHit`) into state transition operators $T_{s \to s'} = \epsilon_{s'} M \epsilon_s$.
+   * **Algebraic Incidence & Transition Compiler (`cc_math` + `cc_field`):** Snaps geometry to tile/Manhattan lattices via spectral Bragg peaks and `pga::snap_manhattan_plane`, and compiles empirical PGA incidence predicates (`StompTop`, `HitBlockBottom`, `UseDoor`, `LineOfSight`, `RayHit`) directly into state transition operators $T_{s \to s'} = \epsilon_{s'} M \epsilon_s$.
 3. **Playable Unfoldment (`cc unfold`):** Zero AI at runtime. Steps at $> 120\text{ Hz}$ headless and $60\text{ Hz}$ interactive (`--play`), rendering either the 2D side-scrolling tile+sprite world or the 3D PGA column-raycast world alongside live $\mathcal{Q}_{\text{Cl}}$ potential diagnostics.
 
 ---
@@ -42,8 +42,7 @@ holonengine/
 ├── crates/
 │   ├── cc_math/       # G(2,0) spinors, idempotents, Q_Cl, G(3,0,1) PGA blades, Motors, meet/join
 │   ├── cc_field/      # HUD separator, 2D CFT scroll + atlas stitcher, 3D column depth, 2D+t sprite CFT
-│   ├── cc_gatr/       # Tile/Manhattan regularizer, wording-space spinor SVD, Active-GATr rule compiler
-│   └── cc_cli/        # `cc enfold | inspect | unfold` CLI, llama.cpp client, 2D & 3D playable runtimes
+│   └── cc_cli/        # `cc enfold | inspect | unfold` CLI, 2D & 3D playable runtimes
 ```
 
 ---
@@ -74,14 +73,14 @@ Compute the 2D spatial CFT cross-power spectrum $\frac{\hat{I}_t \hat{I}_{t-1}^*
 * For each tracked actor state segment (e.g., Mario run/jump, Goomba walk, Wolf3D guard patrol/shoot), resample the actor crop sequence into a canonical rest grid.
 * Compute the 2D+t CFT $\hat{K}_{i,s}(k_x, k_y, \omega)$ and retain the top $M$ spectral modes (storing spatial silhouette/albedo in $\omega = 0$ and periodic limb/walk oscillation in $\omega_1 \dots \omega_M$).
 
-### Stage 4 — Active-GATr State-Transition Binding (`compile_transitions`) (REASSESS IF GATR IS NEEDED FOR STATE CHANGE)
-* Bind observed state transitions $\epsilon_s \to \epsilon_{s'}$ to PGA geometric incidence predicates and semantic spinor alignment $\mathcal{A}_{ij}$:
+### Stage 4 — Algebraic Incidence & State-Transition Binding (`compile_transitions`)
+* Bind observed state transitions $\epsilon_s \to \epsilon_{s'}$ directly to empirical PGA geometric incidence predicates and velocity discontinuities ($\Delta \mathbf{P}_B$):
   * **2D Predicates:** `TopStomp` ($P_{\text{player\_foot}} \wedge L_{\text{enemy\_top}}$ with $v_y > 0$), `BottomBump` ($P_{\text{player\_head}} \wedge L_{\text{block\_bottom}}$ with $v_y < 0$), `SideHit` ($P_{\text{player}} \wedge L_{\text{enemy\_side}}$).
 
 
-### Stage 5 — `llama.cpp` VLM + Wording-Space Spinor Projection (`cc_gatr`) (FEATURE ON HOLD)
-* Run `llama-mtmd-cli` / `llama-server` with `--temp 0 --seed 42` and a strict GBNF grammar (`holon_schema.gbnf`) on a contact sheet of extracted tiles and canonical actor sprites to assign canonical labels (`mario`, `goomba`, `koopa`, `question_block`, `guard`, `sliding_door`, `hud_bar`) and state names.
-* Run `llama-embedding` on VLM descriptions and `rules.md` clauses; compute the thin SVD of the normalized Gram matrix $S_{ij} = \langle \hat{e}_i, \hat{e}_j \rangle$ to map each Holon and rule into a $K$-channel spinor $\psi_i = R_i e^{\theta_i e_{12}} \in (\mathbb{G}_{2,0}^+)^K$.
+### Stage 5 — Optional `llama.cpp` VLM + Wording-Space Spinor Projection (FEATURE ON HOLD)
+* Run `llama-mtmd-cli` / `llama-server` with `--temp 0 --seed 42` and a strict GBNF grammar (`holon_schema.gbnf`) on a contact sheet of extracted tiles and canonical actor sprites to assign canonical labels and state names.
+* Run `llama-embedding` on VLM descriptions and `rules.md` clauses; compute the thin SVD of the normalized Gram matrix $S_{ij} = \langle \hat{e}_i, \hat{e}_j \rangle$ to map each Holon and rule into a $K$-channel spinor $\psi_i = R_i e^{\theta_i e_{12}} \in (\mathbb{G}_{2,0}^+)^K$, binding rules via the bilinear spinor inner product $\langle \psi_{\text{rule}}, \widetilde{\psi}_{\text{holon}} \rangle_0$.
 
 ### Stage 6: 3D Perspective Pipeline (`example_input3d`) (FEATURE ON HOLD)
 1. **Horizon-Symmetric Column Depth (`extract_column_depth`):** Locate the viewport horizon $y_h = H_{\text{view}}/2$ separating flat ceiling (`#383838`) and floor (`#707070`). For each column $x$, measure the symmetric vertical wall span $h(x, t)$ around $y_h$ to obtain inverse projective depth $d(x, t) = f / h(x, t)$.
@@ -163,10 +162,10 @@ Compute the 2D spatial CFT cross-power spectrum $\frac{\hat{I}_t \hat{I}_{t-1}^*
     2. Reconstructed orthogonal E1M1 starting room, cyan door, and corridor wall planes within $< 2\%$ depth error,
     3. Canonical $64 \times 64$ guard and wall texture synthesis with $> 25\text{ dB}$ PSNR.
 
-### Phase 4: `llama.cpp` Wording-Space & Active-GATr Compiler (`cc_gatr` + `cc_cli`)
+### Phase 4: Wording-Space Spinor Projection & Counterfactual CLI (`cc_field` + `cc_cli`)
 * **Implementor Steps:**
-  1. Create `crates/cc_gatr` with `llama.cpp` subprocess/HTTP client (`llama-mtmd-cli` / `llama-server` + `llama-embedding`), GBNF schema, and `.cc_cache/` fixture persistence.
-  2. Implement Gram-matrix SVD spinor projection and Active-GATr coupling matrix $\mathcal{A}_{ij}$ across both `example_input2d` (`smb3_w1_1_320x240.mp4` + `rules.md`) and `example_input3d` (`wolf3d_e1m1_320x240.mp4` + `rules.md`).
+  1. Add optional `llama.cpp` subprocess/HTTP client (`llama-mtmd-cli` / `llama-server` + `llama-embedding`), GBNF schema, and `.cc_cache/` fixture persistence.
+  2. Implement Gram-matrix SVD spinor projection and bilinear spinor coherence coupling $\langle \psi_i, \widetilde{\psi}_j \rangle_0$ across both `example_input2d` and `example_input3d`.
   3. Complete the unified `cc` CLI (`cc enfold <dir> -o <model.cc>`, `cc inspect <model.cc> [--query]`, `cc unfold <model.cc> [--play | --input | --perturb] [-o out.mp4]`) supporting both 2D side-scrolling and 3D PGA raycast worlds.
 * **Exit Gate (Full Engine Complete):**
   1. **2D Gate:** `cc enfold example_input2d -o smb3.cc && cc unfold smb3.cc --input example_input2d/play_trace.json -o smb3_play.mp4` produces a verified 60 FPS playable side-scroller + $\mathcal{Q}_{\text{Cl}}$ diagnostic video.

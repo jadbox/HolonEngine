@@ -184,8 +184,8 @@ impl CliffordDensityElement {
     }
 
     /// [Bilinear Invariant of the First Kind: Intrinsic Spinor Coherence]
-    /// Algebraic spinor coherence $\langle \psi_i, \psi_j \rangle \in [0, 1]$ between
-    /// two holons' intrinsic signatures (Active-GATr Term 2).
+    /// Algebraic spinor coherence $\langle \psi_i, \widetilde{\psi}_j \rangle_0 \in [0, 1]$ between
+    /// two holons' intrinsic signatures.
     pub fn signature_coherence(&self, other: &Self) -> f64 {
         let mut dist_sq = 0.0;
         for c in 0..3 {
