@@ -88,39 +88,75 @@ During `cc unfold`, the spatial lattice carries a real-time amplitude field $\Ps
 
 $$\mathcal{Q}_{\text{Cl}} = -(\nabla^2 \Psi)\Psi^{-1} = \underbrace{-\frac{\nabla^2 R}{R}}_{\text{Scalar Guidance } \langle \mathcal{Q}_{\text{Cl}} \rangle_0} - \underbrace{\left(2(\nabla \ln R)\mathcal{U}\nabla\widetilde{\mathcal{U}} + (\nabla^2 \mathcal{U})\widetilde{\mathcal{U}}\right)}_{\text{Bivector Spin-Torque } \langle \mathcal{Q}_{\text{Cl}} \rangle_2}$$
 
-* **Scale-Invariant Valley Guidance:** Because $\langle \mathcal{Q}_{\text{Cl}} \rangle_0 = -\nabla^2 R / R$ normalizes spatial curvature by amplitude, guidance depends solely on the *geometric form* of the environment.
-* **Boundary Impedance & Attractor Basins:** `TileKind::Solid` cells clamp $R \to R_{\text{floor}}$, forming steep positive $\mathcal{Q}_{\text{Cl}}$ repeller ridges along walls and pipes. Open corridors (`TileKind::Empty`) and active collectible excitations inject smooth positive amplitude domes, carving negative-$\mathcal{Q}_{\text{Cl}}$ valleys through the level.
+* **Scale-Invariant Valley Guidance:** Because $\langle \mathcal{Q}_{\text{Cl}} \rangle_0 = -\nabla^2 R / R$ normalizes spatial curvature by amplitude, guidance depends solely on the *geometric form* of the environment rather than raw field magnitude.
+* **Continuous Boundary Impedance & Attractor Basins (`Model2D::build_continuous_qfield`):** Impermeable boundary contours clamp $R \to 0.08$, forming steep positive $\mathcal{Q}_{\text{Cl}}$ repeller ridges along walls and obstacles; semi-permeable contours set intermediate impedance ($R \to 0.60$); open corridors and active `FieldExcitation`s inject smooth amplitude domes ($R \to 1.25$), carving negative-$\mathcal{Q}_{\text{Cl}}$ guidance valleys without requiring a discrete tile grid.
 
 ---
 
-## 4. Game-Agnostic Spatiotemporal Compiler (`cc_field::enfold2d`)
+## 4. Game-Agnostic Spatiotemporal Compiler & Unified Runtime (`cc_field` + `cc_cli`)
 
-`cc enfold` extracts the complete `.cc` world model directly from raw video without relying on per-game rules files or palette constants:
+`cc enfold` compiles raw gameplay video into a self-contained `.cc` world model without per-game rules files, palette constants, or genre branches. Every architectural stage exists to replace a traditional hardcoded game assumption with an inferred algebraic or spectral invariant:
 
-1. **Scene Stability Segmentation (`detect_playfield_segment`):**
-   Scans the video stream for the longest contiguous run of active frames sharing a stable border backdrop mode, automatically stripping title screens, menus, and attract-mode cuts.
-2. **Spectral Camera Regime Discovery (`detect_camera_is_static`, `ScrollEstimator`):**
-   Evaluates 2D FFT cross-power phase correlation across the playfield band. Near-zero cumulative drift ($\max |\Delta \mathbf{X}_{\text{cam}}| \le 4\text{ px}$) selects the static arena regime (`Ortho2D-Static`), while translational flow selects scrolling odometry (`Ortho2D-Scroll`). In $\mathbb{G}_{3,0,1}$, odometry is parameterized uniformly by the translational camera ego motor:
-   $$M_{\text{ego}}(t) = \exp\left(-\frac{1}{2}(v_x e_{01} + v_y e_{02})\Delta t\right)$$
-   distinguishing horizontal side-scrolling ($|v_x| \gg |v_y|$ with $g_y > 0$) from vertical flight corridors ($|v_y| \gg |v_x|$ with $g_y = 0$). Offsets are refined to single-pixel lock via local SSAD.
-3. **Topological Boundary & Collectible Separation (`extract_2d_tiles_with`):**
-   * Learns the backdrop color from the border mode.
-   * In scrolling worlds with a continuous floor (`has_ground`), extracts the per-column ground surface, raised terrain steps, and flat-topped `OneWay` shelves (pipes, platforms, floating blocks) while relegating curved shapes (clouds, hills, bushes) to `Background`.
-   * In floorless / planar worlds, segments 8-connected components of non-background pixels: extended structural boundaries ($\max(w, h) \ge 2 \times \text{tile\_size}$) become 4-sided `Solid` walls, while small isolated corridor components ($\max(w, h) \le 12\text{ px}$) are extracted as discrete **Collectible Field Excitations** (`collectibles`).
-4. **Mobile Process vs. Stationary Site Separation & Spinor-Coherent Tracking (`track_actors`):**
-   * Residual bounding boxes carry their mean foreground chromatic spinor $\psi_b$.
-   * Frame-to-frame assignment minimizes a joint spatial + spinor-coherence cost $d(\mathbf{x}_a, \mathbf{x}_b) + \lambda \|\psi_a - \psi_b\|$ under both Euclidean and toroidal (warp-tunnel) metrics.
-   * Non-overlapping track fragments with matching spinor coherence ($\|\psi_a - \psi_b\| \le \tau_\psi$) are unified into a single persistent `ActorTrack`.
-   * Processes with world displacement $\max(\Delta X, \Delta Y) \ge 10\text{ px}$ ($\mathbf{P}_B \neq 0$) are compiled into mobile `ActorTrack`s and masked out of the static background atlas in Pass 3; stationary blinking sites ($\mathbf{P}_B = 0$) remain anchored in the world lattice.
-5. **Inferred Field Constants & Learned Kinematic Excursion Tensors (`TrackRecord::span`, `TrackRecord::velocity`):**
-   * Analyzes ground-surface support (`ground_top < atlas_height`) to infer whether the world is governed by downward gravity ($g_y > 0$) or planar zero-gravity kinematics ($g_y = 0$).
-   * Records each holon's world-space excursion tensor $\Delta \mathbf{X}_i = [\Delta X_i, \Delta Y_i]$ and mean velocity $\bar{\mathbf{v}}_i = [\bar{v}_x, \bar{v}_y]$ directly in the `.cc` manifest.
-   * **Zero Pixel-Dimension Heuristics:** Whether a holon patrols horizontally along $e_1$, oscillates vertically along $e_2$, or navigates 2D corridors is determined purely by its observed world-space excursion tensor $\Delta \mathbf{X}_i$:
-     * If $\Delta Y_i > 2\,\Delta X_i$, the `CliffordDensityElement` rotor is initialized along $-e_2$ ($\theta_0 = -\pi/2$) and evolves via `bohm_momentum` + `reflect_at_boundary` between its learned world excursion bounds $[Y_0 - \Delta Y_i,\; Y_0]$.
-     * Otherwise, in gravitational worlds the rotor is initialized along $e_1$ ($\theta_0 = \pi$) and reflects at tile boundaries; in planar zero-gravity worlds ($g_y = 0$), the rotor is steered continuously by $\mathcal{Q}_{\text{Cl}}$ quantum torque (`apply_quantum_torque`).
-   * **Camera-Coupled State Branches & Composite Rejection:**
-     * In scrolling worlds, non-primary track segments that translate continuously with the camera flow ($\Delta X_i \ge 150\text{ px}$ and $\bar{v}_x \ge 1.2\text{ px/frame}$) are recognized as state-idempotent branches ($\epsilon_0, \epsilon_1, \dots$) of the `Player` holon rather than separate enemy spawns.
-     * In planar arenas, short-lived bounding boxes whose area exceeds $\frac{3}{2}$ of the primary holon scale ($\text{area}_i > 1.5\,\text{area}_0$ and $N_i < \frac{1}{3}N_0$) are identified as transient two-actor overlap composites and rejected.
+### 4.1 Scene Stability Segmentation & Spectral Camera Regime Discovery
+* **Why It Matters:** Gameplay recordings contain title screens, menus, iris transitions, and static HUD bars that corrupt odometry if mixed with active playfield motion. Moreover, the compiler cannot pre-assume whether a game is a static arena, a horizontal side-scroller, or a vertical corridor shooter.
+* **How It Is Used:**
+  1. `detect_playfield_segment` locates the longest contiguous active scene sharing a stable border backdrop mode and applies a settle margin (`0.6s`) after scene cuts so transition frames never shift world origin coordinates.
+  2. `detect_camera_is_static` and `ScrollEstimator` evaluate 2D FFT cross-power phase correlation across the playfield band, refined to single-pixel registration via local SSAD (`refine_offset`). Near-zero drift ($\max |\Delta \mathbf{X}_{\text{cam}}| \le 4\text{ px}$) selects `Ortho2D-Static`; translational flow selects `Ortho2D-Scroll` governed by the PGA camera ego motor:
+     $$M_{\text{ego}}(t) = \exp\left(-\frac{1}{2}(v_x e_{01} + v_y e_{02})\Delta t\right)$$
+
+### 4.2 Topological Boundary & Collectible Separation (`extract_2d_tiles_with`)
+* **Why It Matters:** Hardcoding RGB palettes for walls, pipes, or collectible dots overfits the compiler to a single game.
+* **How It Is Used:**
+  * The backdrop color is learned from the playfield border mode.
+  * In worlds with a continuous floor (`has_ground`), per-column dense runs identify the primary ground surface, raised terrain steps (bridging across foreground occluders such as bushes and hills up to the atlas boundary), and flat-topped semi-permeable shelves while relegating curved contours (clouds, hills, bushes) to non-collidable background scenery.
+  * In floorless planar worlds, 8-connected components of non-background pixels separate extended structural walls ($\max(w, h) \ge 2 \times \text{tile\_size}$) from isolated corridor **Collectible Field Excitations** (`ModelManifest::collectibles`).
+
+### 4.3 Surface-Clipped Residuals & Spinor Occlusion Factorization (`track_actors_coherent`)
+* **Why It Matters:** Two failure modes plague naive bounding-box tracking from video:
+  1. *Subterranean Stripe Bleed:* High-contrast diagonal ground textures under $\pm 1\text{ px}$ scroll jitter generate spurious residual boxes inside the floor or pull the bottom edge of walking actors 3–6 px below their supporting surface.
+  2. *Multi-Actor Crossing Occlusions:* When two actors cross paths, connected-component segmentation merges their silhouettes into a single compound box ($\text{area} > \frac{5}{4}\text{area}_0$), causing greedy assignment to drop tracks or inflate hitboxes.
+* **How It Is Used:**
+  * **Surface Clipping:** Prior to Pass 2 tracking, `enfold` extracts the preliminary solid surface profile `pre_surface[tx]` from Pass 1. Residual boxes extending into `pre_surface[tx]` are clipped at `surf_frame_y - 1`, and boxes originating inside the terrain (`b.y0 >= surf_frame_y - 6`) are rejected.
+  * **Spinor Factorization:** Before greedy 1-to-1 frame assignment, any unmatched compound residual box spanning two established open tracks is factored into per-track sub-boxes anchored at each track's predicted center and canonical dimensions.
+  * **Excursion-Based Role Discovery:** Tracks are classified without game-specific size buckets (`Goomba` and `Koopa` enum variants have been removed in favor of `ActorKind::Player` and `ActorKind::Autonomous`). Camera-coupled trajectories and 2D ballistic jumpers ($\Delta X \ge 60\text{ px},\; \Delta Y \ge 48\text{ px}$) are unified as state branches of the primary `Player` holon.
+
+### 4.4 Trajectory-Regressed Field Drift & Control Motor Basis (`infer_world_kinematics`)
+* **Why It Matters:** Hardcoding `gravity = 0.48`, `RUN = 1.6`, or `JUMP = 6.2` bakes platformer micro-mechanics into the runtime. Conversely, regressing acceleration from single-frame ($\Delta t = 1$) finite differences on integer-quantized bounding boxes suffers from severe integer truncation bias.
+* **How It Is Used:**
+  * `infer_world_kinematics` (`crates/cc_field/src/model2d.rs`) evaluates second-order finite differences over a multi-frame stride ($\Delta t = 4,\; \Delta t^2 = 16$):
+    $$\bar{a}_y(t) = \frac{y(t + 4) - 2y(t) + y(t - 4)}{16}$$
+    across uncollided free-flight trajectory segments to populate `ModelManifest::env_drift: [f32; 2]` ($\mathbf{a}_{\text{env}}$).
+  * From the primary holon's trajectory, steady ground-contact horizontal speed gives `drive_speed` ($v_0$), while the 75th-percentile ballistic apex height $\Delta h$ above support yields the vertical launch impulse via energy conservation:
+    $$J_\perp = \sqrt{2\,a_y\,\Delta h}$$
+    stored together as `ModelManifest::control_motor: [f32; 2]`.
+
+### 4.5 Stationary `BoundaryBlade` Admittance & Pre-Incidence Causal Restoration
+* **Why It Matters:** Traditional engines hardcode entity classes like `BlockProp` or draw procedural pixel art at runtime (such as a hardcoded `?` block glyph). In video compilation, a second subtle trap arises: an interactive block struck early in a recording (e.g., at $t = 1.5\text{ s}$ of a $21\text{ s}$ clip) spends $> 90\%$ of the video in its post-impact *spent* state ($\epsilon_2$), causing a full-stream temporal mode to bake the spent appearance into the initial world atlas.
+* **How It Is Used:**
+  * `Model2D::infer_boundary_blades` compiles static world geometry into `BoundaryBlade`s (`ModelManifest::boundaries`), each carrying continuous world bounds `rect: [i32; 4]`, directional permeability `permeability: [f32; 4]` along `[left, right, top, bottom]`, `excitable: bool`, and `frame_color: [u8; 3]`.
+  * **Pre-Incidence Causal Restoration (`init_acc`):** During `enfold`, an unmasked pre-incidence accumulator over the initial frames ($t < t_{\text{hit}}$) restores the genuine video State 0 ($\epsilon_0$) texture onto suspended boundaries in `atlas`, while `learn_rect_frame_color` extracts the post-incidence perimeter color for State 2 ($\epsilon_2$).
+  * At runtime, `WorldState2D::render` renders State 0 directly from the restored `atlas` pixels, State 1 by displacing the `atlas` patch along a parabolic impulse arc, and State 2 using the learned `frame_color`—requiring zero procedural glyph code.
+
+### 4.6 2D+t CFT Sprite Vitality Kernels ($\hat{K}_0, \hat{K}_1$) & Fourier Shift Synthesis (`evaluate_sprite_cft`)
+* **Why It Matters:** Storing only a single static median PNG per actor leaves characters visually frozen during unfoldment unless the runtime resorts to game-specific procedural pixel hacks (mouth wedges, skirt shifts, or eye RGB checks).
+* **How It Is Used:**
+  * **Neighborhood-Filtered Extraction:** In Pass 3 of `enfold`, foreground actor pixels are tested against a $7 \times 5$ neighborhood of `plain_atlas` (`dx in -3..=3, dy in -2..=2`) so $\pm 1\text{--}3\text{ px}$ registration shifts over striped background hills or bushes never bleed background scenery into actor sprites.
+  * **Quadrature Harmonic Storage:** Pass 3 accumulates both the DC canonical silhouette $\hat{K}_0(x, y)$ (`TrackRecord::sprite`) and the first temporal CFT harmonic $\hat{K}_1(x, y)$ (`TrackRecord::harmonic_sprite`, encoded losslessly as `128 + delta` RGBA PNG).
+  * **Runtime Spectral + Fourier Shift Evaluation:** `Model2D::evaluate_sprite_cft` synthesizes each active holon's appearance from its arc-length phase $\phi(t) = \int \|\mathbf{P}_{B,i}\|\,dt$ and spinor heading $\mathbf{s}_i$:
+    $$I(x, y, \phi) = \mathcal{T}_\phi\!\left[\hat{K}_0(x, y) + \operatorname{Re}\!\left\{\hat{K}_1(x, y)\,e^{i\phi}\right\}\right]$$
+    By the Fourier Shift Theorem, the spatial phase-shift operator $\mathcal{T}_\phi$ decomposes the canonical rest frame vertically into three coupled bands:
+    1. *Lower Band ($y \in [\frac{2}{3}H, H)$):* Antisymmetric bipedal left/right foot lift ($\Delta y_{\text{footL/R}} \propto \pm\sin\phi$) and horizontal leg stride shear ($\Delta x_{\text{stride}} \propto \sin\phi$).
+    2. *Middle Band ($y \in [\frac{1}{3}H, \frac{2}{3}H)$):* Counter-phase arm/torso swing ($\Delta x_{\text{arm}} \propto -\sin\phi$) and lateral wing/limb vertical oscillation ($\Delta y_{\text{wing}} \propto \cos\phi$).
+    3. *Upper Band ($y \in [0, \frac{1}{3}H)$):* Double-frequency stride bob ($\Delta y_{\text{bob}} \propto \sin 2\phi$), followed by $\text{Pin}(2,0)$ horizontal reflection $e_1 x e_1$ aligned with heading rotor $U_i$.
+
+### 4.7 Unified Implicate Runtime (`WorldState2D::step` & `WorldState2D::render`)
+* **Why It Matters:** Branching runtime execution into separate genre loops (`if is_static`, `if is_flight`, `else platformer`) reintroduces the atomistic state-machine paradigm at the engine level.
+* **How It Is Used:**
+  * `crates/cc_cli/src/main.rs` executes a single `WorldState2D` engine across all 2D models (`smb3.cc`, `pacman.cc`, `raptor.cc`):
+    1. Steps `BoundaryHolon` impulse timers ($T_{1 \to 2}$) and secondary medium excitations (`AttachedWake`, `SolitonProjectile`, `FieldExcitation`, `RadialDispersion`).
+    2. Steps all `MobileHolon`s under `env_drift`, `control_motor`, `BoundaryBlade` directional admittance (resolving vertical surface support prior to lateral wall reflection so actors traverse raised terrain steps without snagging), and $\mathcal{Q}_{\text{Cl}}$ quantum torque (`apply_quantum_torque`).
+    3. Resolves relational incidences ($P_{\text{primary}} \wedge L_{\text{actor,top}}$ top-down restitution, soliton-holon collapse, and `FieldExcitation` absorption).
+    4. Renders the camera-transformed atlas, active/collapsed `BoundaryHolon`s, and CFT-synthesized `MobileHolon` sprites in a single pass at $900\text{--}2,800\text{ Hz}$.
 
 ---
 
@@ -165,5 +201,13 @@ In accordance with `docs/storybook_philosophy.md` (§1.1, §4.2), the fundamenta
 5. **Pre-Incidence vs. Post-Incidence Causal Boundary States:**
    * **Phenomenon:** An interactive boundary ($\mathcal{B}_k$) struck early in a gameplay recording spends most of the video in its post-impact spent state ($\epsilon_2$), causing a naive full-stream temporal mode to bake the spent appearance into the initial world atlas.
    * **Law:** Stationary excitable boundaries (`BoundaryBlade`) separate causal epochs: the unmasked pre-incidence window ($t < t_{\text{hit}}$) populates the active State 0 ($\epsilon_0$) atlas texture, while the perimeter mode captures the collapsed State 2 ($\epsilon_2$) structural color, eliminating runtime pixel forgery.
+
+6. **Subterranean Ground-Stripe Exclusion & Support-First Incidence Order:**
+   * **Phenomenon:** Under $\pm 1\text{ px}$ camera registration jitter, diagonal high-contrast ground textures generate spurious residual blobs below the surface line (`y >= surface[tx]`) and extend walking actor bounding boxes 3–6 px into the floor. Furthermore, probing lateral wall collisions before updating vertical surface support causes actors stepping onto raised terrain ledges to collide with the ledge underneath their feet.
+   * **Law:** Actor residual extraction must clip bounding boxes at the discovered solid terrain contour `pre_surface[tx] - 1` and reject subterranean residuals, while runtime kinematics (`WorldState2D::step`) must resolve vertical surface support coupling prior to lateral boundary reflection.
+
+7. **Multi-Frame Stride Regression vs. Integer Quantization Bias:**
+   * **Phenomenon:** Evaluating second-order acceleration differences $\Delta^2 y_t = y(t+1) - 2y(t) + y(t-1)$ at single-frame steps ($\Delta t = 1$) on integer pixel bounding boxes quantizes accelerations to integers $\{0, \pm 1, \pm 2\}$, biasing positive-filtered medians upward by $> 40\%$.
+   * **Law:** Field acceleration ($\mathbf{a}_{\text{env}}$) and cruise velocities must be regressed over a multi-frame stride ($\Delta t \ge 4,\; \Delta t^2 = 16$), where sub-pixel accelerations accumulate into multi-pixel displacements that dominate integer rounding noise.
 
 
