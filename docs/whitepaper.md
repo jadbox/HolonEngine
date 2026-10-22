@@ -160,6 +160,10 @@ In accordance with `docs/storybook_philosophy.md` (§1.1, §4.2), the fundamenta
 
 4. **Multi-Body Overlap Composites vs. Fundamental Minimal Left Ideals:**
    * **Phenomenon:** When two actors cross paths in a corridor, connected-component residual segmentation yields a transient bounding box of area $\text{area}_{i+j} > \frac{3}{2}\text{area}_0$ and blended color spinor $\frac{1}{2}(\psi_i + \psi_j)$.
-   * **Law:** Fundamental holons correspond to persistent minimal left ideals. Short-lived tracks ($T < \frac{1}{3}T_{\max}$) with super-primary area ($\text{area} > \frac{3}{2}\text{area}_0$) are tensor-product overlap composites and must be factored by spinor projection or rejected.
+   * **Law:** Fundamental holons correspond to persistent minimal left ideals. Compound boxes spanning two established open tracks are factored into per-track sub-boxes prior to greedy assignment (`track_actors_coherent`), preserving trajectory continuity across multi-actor crossings.
+
+5. **Pre-Incidence vs. Post-Incidence Causal Boundary States:**
+   * **Phenomenon:** An interactive boundary ($\mathcal{B}_k$) struck early in a gameplay recording spends most of the video in its post-impact spent state ($\epsilon_2$), causing a naive full-stream temporal mode to bake the spent appearance into the initial world atlas.
+   * **Law:** Stationary excitable boundaries (`BoundaryBlade`) separate causal epochs: the unmasked pre-incidence window ($t < t_{\text{hit}}$) populates the active State 0 ($\epsilon_0$) atlas texture, while the perimeter mode captures the collapsed State 2 ($\epsilon_2$) structural color, eliminating runtime pixel forgery.
 
 

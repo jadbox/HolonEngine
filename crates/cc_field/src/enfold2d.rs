@@ -600,11 +600,15 @@ pub fn detect_playfield_segment(path: &Path) -> io::Result<(f64, f64, VideoInfo)
     let (s, e) = best.or(last_run).ok_or_else(|| {
         io::Error::other("no playfield segment found (no stable scene run of >= 60 frames)")
     })?;
-    Ok((
-        s as f64 / fps,
-        (e - s) as f64 / fps,
-        info,
-    ))
+    let raw_start = s as f64 / fps;
+    let raw_dur = (e - s) as f64 / fps;
+    let (start_sec, dur_sec) = if s > 0 && raw_dur > 2.0 {
+        let trim = 0.6;
+        (raw_start + trim, (raw_dur - trim).clamp(1.0, 21.0))
+    } else {
+        (raw_start, raw_dur.clamp(1.0, 25.0))
+    };
+    Ok((start_sec, dur_sec, info))
 }
 
 // ---------------------------------------------------------------------------
@@ -1026,12 +1030,11 @@ pub fn refine_offset(
     best
 }
 
-/// What an extracted track is playing as.
+/// Role of an extracted holon track in the implicate world model.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActorKind {
     Player,
-    Goomba,
-    Koopa,
+    Autonomous,
     Unknown,
 }
 
@@ -1039,20 +1042,22 @@ impl ActorKind {
     pub fn as_str(self) -> &'static str {
         match self {
             ActorKind::Player => "player",
-            ActorKind::Goomba => "goomba",
-            ActorKind::Koopa => "koopa",
+            ActorKind::Autonomous => "autonomous",
             ActorKind::Unknown => "unknown",
         }
     }
 }
 
-/// Canonical RGBA sprite with per-pixel coverage alpha.
+/// Canonical RGBA sprite kernel with DC mode ($\omega_0$) and first temporal
+/// CFT harmonic ($\omega_1$, encoded as `128 + delta` per channel).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sprite2D {
     pub width: usize,
     pub height: usize,
-    /// RGBA, row-major.
+    /// DC mode $\hat{K}_0(x, y)$ RGBA, row-major.
     pub rgba: Vec<u8>,
+    /// First temporal harmonic $\hat{K}_1(x, y)$ RGBA biased by `+128` (`128` = zero delta).
+    pub harmonic_rgba: Vec<u8>,
 }
 
 impl Sprite2D {
@@ -1153,9 +1158,83 @@ pub fn track_actors_coherent(
                 }
             }
         }
-        pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-        let mut used_t = vec![false; open.len()];
+        let orig_open_len = open.len();
+        let mut used_t = vec![false; orig_open_len];
         let mut used_b = vec![false; boxes.len()];
+
+        // Spinor factorization during multi-actor occlusions: if a compound
+        // bounding box has no single-track size match and spans two established
+        // open tracks of comparable scale, factor it into per-track sub-boxes.
+        for (bi, (b, _)) in boxes.iter().enumerate() {
+            let has_direct_size_match = open.iter().take(orig_open_len).any(|t| {
+                fi - t.last <= max_gap
+                    && (b.width() - t.last_box.width()).abs() <= 6
+                    && (b.height() - t.last_box.height()).abs() <= 6
+            });
+            if has_direct_size_match {
+                continue;
+            }
+            let mut nearby_open: Vec<(usize, f64)> = open
+                .iter()
+                .enumerate()
+                .take(orig_open_len)
+                .filter(|(ti, t)| {
+                    !used_t[*ti]
+                        && fi - t.last <= max_gap
+                        && t.boxes.len() >= 3
+                        && t.last_box.width() >= 10
+                        && t.last_box.height() >= 10
+                })
+                .filter_map(|(ti, t)| {
+                    let tc = t.last_box.center();
+                    let c = b.center();
+                    let dx = if is_static {
+                        let raw = (c[0] - tc[0]).abs();
+                        raw.min(vw - raw)
+                    } else {
+                        (c[0] - tc[0]).abs()
+                    };
+                    let dy = (c[1] - tc[1]).abs();
+                    let d = (dx * dx + dy * dy).sqrt();
+                    let tw = t.last_box.width();
+                    let th = t.last_box.height();
+                    if d <= max_dist * 1.25
+                        && b.area() >= (tw * th * 5) / 4
+                        && b.area() <= tw * th * 3
+                    {
+                        Some((ti, d))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            nearby_open.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            if nearby_open.len() >= 2 {
+                for &(ti, _) in nearby_open.iter().take(2) {
+                    used_t[ti] = true;
+                    let t = &mut open[ti];
+                    let tw = t.last_box.width();
+                    let th = t.last_box.height();
+                    let tc = t.last_box.center();
+                    let sx0 =
+                        (tc[0].round() as i32 - tw / 2).clamp(b.x0, (b.x1 - tw + 1).max(b.x0));
+                    let sy0 =
+                        (tc[1].round() as i32 - th / 2).clamp(b.y0, (b.y1 - th + 1).max(b.y0));
+                    let sub = Rect {
+                        x0: sx0,
+                        y0: sy0,
+                        x1: (sx0 + tw - 1).min(b.x1),
+                        y1: (sy0 + th - 1).min(b.y1),
+                    };
+                    t.boxes.push((fi, sub));
+                    t.last = fi;
+                    t.last_box = sub;
+                }
+                used_b[bi] = true;
+            }
+        }
+
+        pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
         for (_, ti, bi) in pairs {
             if used_t[ti] || used_b[bi] {
                 continue;
@@ -1292,17 +1371,25 @@ pub fn track_actors_coherent(
         }
     }
 
-    // Filter out stationary shimmering lattice sites (world excursion < 20 px)
+    // Filter out stationary shimmering lattice sites and thin seam fragments
     // after fragment unification.
     merged.retain(|t| {
         if t.boxes.len() < 8 {
+            return false;
+        }
+        let (w, h) = t.median_size();
+        if !is_static && (w < 12 || h < 13) {
             return false;
         }
         if !is_static && scroll_is_trivial {
             return true;
         }
         let (dx, dy) = world_span(t);
-        dx.max(dy) >= if is_static { 12.0 } else { 20.0 }
+        if is_static {
+            dx.max(dy) >= 12.0
+        } else {
+            dx >= 28.0 || dy >= 24.0
+        }
     });
     merged.sort_by_key(|t| std::cmp::Reverse(t.boxes.len()));
     if is_static && !merged.is_empty() {
@@ -1318,7 +1405,7 @@ pub fn track_actors_coherent(
     classify_tracks(&mut merged);
     if !is_static && !scroll_is_trivial {
         for t in &mut merged {
-            let (dx, _) = world_span(t);
+            let (dx, dy) = world_span(t);
             let mut vx_sum = 0.0f64;
             let mut v_cnt = 0usize;
             for pair in t.boxes.windows(2) {
@@ -1336,7 +1423,7 @@ pub fn track_actors_coherent(
                 }
             }
             let mean_vx = if v_cnt > 0 { vx_sum / v_cnt as f64 } else { 0.0 };
-            if dx >= 150.0 && mean_vx >= 1.2 {
+            if (dx >= 150.0 && mean_vx >= 1.2) || (dx >= 60.0 && dy >= 48.0) {
                 t.kind = ActorKind::Player;
             }
         }
@@ -1344,9 +1431,8 @@ pub fn track_actors_coherent(
     (merged, all_moving)
 }
 
-/// In any side-scroller, the player is the persistent actor across the gameplay
-/// segment (most frames alive in human/playable dimensions), whereas enemies exist
-/// only locally around their spawn points.
+/// Classify the primary persistent holon vs. autonomous environmental holons
+/// purely from temporal persistence without game-specific size heuristics.
 fn classify_tracks(tracks: &mut [ActorTrack]) {
     let mut best: Option<(usize, usize)> = None;
     for (i, t) in tracks.iter().enumerate() {
@@ -1364,12 +1450,7 @@ fn classify_tracks(tracks: &mut [ActorTrack]) {
     }
     for t in tracks.iter_mut() {
         if t.kind == ActorKind::Unknown {
-            let (w, h) = t.median_size();
-            if w <= 22 && h <= 22 {
-                t.kind = ActorKind::Goomba;
-            } else if w <= 24 && h <= 32 {
-                t.kind = ActorKind::Koopa;
-            }
+            t.kind = ActorKind::Autonomous;
         }
     }
 }
@@ -1802,11 +1883,13 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
                 }
                 look += 1;
             }
-            if bridge {
+            if look > end && look >= cols.saturating_sub(1) && end - tx >= 4 {
+                bridge = true;
+            }
+            if bridge && look > end {
                 for r in surface_row.iter_mut().take(look).skip(end) {
                     *r = step;
                 }
-                tx = look;
             } else {
                 tx = end;
             }
@@ -2289,6 +2372,14 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         return Err(io::Error::other("no frames decoded in enfold range"));
     }
     let plain_atlas = acc.to_atlas();
+    let pre_surface: Vec<i32> = if !is_static {
+        let mut pre_opts = TileOptions::default();
+        pre_opts.hud_bottom = hud_bottom;
+        pre_opts.hud_top = hud_top;
+        extract_2d_tiles_with(&plain_atlas, &pre_opts).surface
+    } else {
+        Vec::new()
+    };
 
     // Pass 2: HUD mode + residual boxes vs the plain atlas.
     let mut reader = video_io::FrameReader::open_range(path, Some(start), Some(duration))?;
@@ -2309,6 +2400,25 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         refined.push(off);
         let mut boxes =
             residual_boxes_with_color(&plain_atlas, &frame, off, hud_bottom, hud_top, 42, 35);
+        // Clip residual boxes at the local solid terrain surface so ground-stripe
+        // registration artifacts below the surface never spawn subterranean tracks
+        // or bleed into the bottom of walking actor silhouettes.
+        if !pre_surface.is_empty() {
+            for (b, _) in &mut boxes {
+                let wx = ((b.x0 + b.x1) / 2 + off[0] - plain_atlas.origin[0]).max(0) as usize;
+                let tx = (wx / TILE).min(pre_surface.len() - 1);
+                let surf_frame_y = pre_surface[tx] - off[1];
+                if b.y1 >= surf_frame_y && b.y0 < surf_frame_y - 6 {
+                    b.y1 = surf_frame_y - 1;
+                }
+            }
+            boxes.retain(|(b, _)| {
+                let wx = ((b.x0 + b.x1) / 2 + off[0] - plain_atlas.origin[0]).max(0) as usize;
+                let tx = (wx / TILE).min(pre_surface.len() - 1);
+                let surf_frame_y = pre_surface[tx] - off[1];
+                b.y0 < surf_frame_y - 6
+            });
+        }
         // Sprite-scale prior: actors are at most two tiles across. Larger
         // residuals are parallax layers (clouds), decorations or seams.
         boxes.retain(|(b, _)| {
@@ -2358,7 +2468,7 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         }
     }
 
-    // Pass 3: masked atlas + sprites.
+    // Pass 3: masked atlas + 2D+t CFT sprite vitality kernels (omega_0 DC + omega_1 harmonic).
     let mut reader = video_io::FrameReader::open_range(path, Some(start), Some(duration))?;
     let mut acc2 = AtlasAccumulator::new(hud_top);
     struct SpriteAcc {
@@ -2367,6 +2477,12 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         buckets: Vec<Bucket>,
         alpha: Vec<u32>,
         total: u32,
+        buckets_pos: Vec<Bucket>,
+        alpha_pos: Vec<u32>,
+        total_pos: u32,
+        buckets_neg: Vec<Bucket>,
+        alpha_neg: Vec<u32>,
+        total_neg: u32,
     }
     let mut sprite_accs: Vec<Option<SpriteAcc>> = tracks
         .iter()
@@ -2375,12 +2491,19 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
             if w <= 0 || h <= 0 || w > 48 || h > 48 {
                 None
             } else {
+                let n = (w * h) as usize;
                 Some(SpriteAcc {
                     w: w as usize,
                     h: h as usize,
-                    buckets: vec![Bucket::default(); (w * h) as usize],
-                    alpha: vec![0; (w * h) as usize],
+                    buckets: vec![Bucket::default(); n],
+                    alpha: vec![0; n],
                     total: 0,
+                    buckets_pos: vec![Bucket::default(); n],
+                    alpha_pos: vec![0; n],
+                    total_pos: 0,
+                    buckets_neg: vec![Bucket::default(); n],
+                    alpha_neg: vec![0; n],
+                    total_neg: 0,
                 })
             }
         })
@@ -2414,7 +2537,13 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
             let Some(sa) = sprite_accs[*ti].as_mut() else {
                 continue;
             };
+            let phase_pos = ((sa.total / 4) % 2) == 0;
             sa.total += 1;
+            if phase_pos {
+                sa.total_pos += 1;
+            } else {
+                sa.total_neg += 1;
+            }
             // Map the (possibly drifting) box into the median sprite canvas.
             let fw = frame.width as usize;
             for sy in 0..sa.h {
@@ -2430,21 +2559,34 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
                     let i = (fy as usize * fw + fx as usize) * 3;
                     let c = [frame.rgb[i], frame.rgb[i + 1], frame.rgb[i + 2]];
                     let si = sy * sa.w + sx;
-                    // Alpha: differs from the plain atlas → actor pixel.
+                    // Alpha: differs from the local neighborhood of the plain
+                    // atlas so registration shifts on striped background hills
+                    // or bush borders never bleed background scenery into actor sprites.
                     let wx = fx + off[0];
                     let wy = fy + off[1];
-                    let is_fg = if let Some(a) = plain_atlas.pixel(wx, wy) {
-                        let d = (c[0] as i32 - a[0] as i32)
-                            .abs()
-                            .max((c[1] as i32 - a[1] as i32).abs())
-                            .max((c[2] as i32 - a[2] as i32).abs());
-                        d > 35
-                    } else {
-                        false
-                    };
+                    let mut min_atlas_dist = i32::MAX;
+                    for dy_a in -2..=2 {
+                        for dx_a in -3..=3 {
+                            if let Some(a) = plain_atlas.pixel(wx + dx_a, wy + dy_a) {
+                                let d = (c[0] as i32 - a[0] as i32)
+                                    .abs()
+                                    .max((c[1] as i32 - a[1] as i32).abs())
+                                    .max((c[2] as i32 - a[2] as i32).abs());
+                                min_atlas_dist = min_atlas_dist.min(d);
+                            }
+                        }
+                    }
+                    let is_fg = min_atlas_dist != i32::MAX && min_atlas_dist > 32;
                     if is_fg {
                         sa.buckets[si].add(c);
                         sa.alpha[si] += 1;
+                        if phase_pos {
+                            sa.buckets_pos[si].add(c);
+                            sa.alpha_pos[si] += 1;
+                        } else {
+                            sa.buckets_neg[si].add(c);
+                            sa.alpha_neg[si] += 1;
+                        }
                     }
                 }
             }
@@ -2453,7 +2595,7 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
     }
     let atlas = acc2.to_atlas_with_fallback(&plain_atlas);
 
-    // Resolve sprites.
+    // Resolve DC (omega_0) and first temporal harmonic (omega_1) sprite kernels.
     for (ti, t) in tracks.iter_mut().enumerate() {
         let Some(sa) = sprite_accs[ti].as_ref() else {
             continue;
@@ -2461,9 +2603,13 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         if sa.total == 0 {
             continue;
         }
-        let mut rgba = vec![0u8; sa.w * sa.h * 4];
+        let n = sa.w * sa.h;
+        let mut rgba = vec![0u8; n * 4];
+        let mut harmonic_rgba = vec![128u8; n * 4];
         let min_hits = (sa.total / 8).max(1);
-        for i in 0..sa.w * sa.h {
+        let min_pos = (sa.total_pos / 6).max(1);
+        let min_neg = (sa.total_neg / 6).max(1);
+        for i in 0..n {
             if let Some((c, _)) = sa.buckets[i].mode() {
                 if sa.alpha[i] >= min_hits {
                     rgba[i * 4] = c[0];
@@ -2472,11 +2618,32 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
                     rgba[i * 4 + 3] = 255;
                 }
             }
+            let ( pos_fg, neg_fg ) = (sa.alpha_pos[i] >= min_pos, sa.alpha_neg[i] >= min_neg);
+            if sa.total_pos >= 2 && sa.total_neg >= 2 && pos_fg != neg_fg {
+                // Silhouette boundary pixel oscillating at omega_1 (limb stride, chomp, skirt):
+                // keep interior pixels speckle-free and modulate boundary occupancy cleanly.
+                if rgba[i * 4 + 3] == 0 {
+                    let active_bucket = if pos_fg {
+                        &sa.buckets_pos[i]
+                    } else {
+                        &sa.buckets_neg[i]
+                    };
+                    if let Some((c, _)) = active_bucket.mode() {
+                        rgba[i * 4] = c[0];
+                        rgba[i * 4 + 1] = c[1];
+                        rgba[i * 4 + 2] = c[2];
+                        rgba[i * 4 + 3] = 128;
+                    }
+                }
+                let da = if pos_fg { 96i32 } else { -96i32 };
+                harmonic_rgba[i * 4 + 3] = (128 + da).clamp(0, 255) as u8;
+            }
         }
         t.sprite = Some(Sprite2D {
             width: sa.w,
             height: sa.h,
             rgba,
+            harmonic_rgba,
         });
     }
 
@@ -2487,6 +2654,44 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
     tile_opts.hud_bottom = hud_bottom;
     tile_opts.hud_top = hud_top;
     let tiles = extract_2d_tiles_with(&atlas, &tile_opts);
+
+    // Pre-incidence causal restoration for suspended interactive surfaces:
+    // before an actor impacts an overhead block (t < t_hit), the early frames of
+    // the segment record its active initial state (e.g. gleaming block insignia),
+    // whereas the full-segment mode records its post-impact spent state.
+    let mut atlas = atlas;
+    if !is_static && tiles.ground_top < atlas.image.height as i32 {
+        let mut init_acc = AtlasAccumulator::new(hud_top);
+        let init_frames = n_frames.min(25);
+        let mut reader = video_io::FrameReader::open_range(path, Some(start), Some(duration))?;
+        let mut f_i = 0usize;
+        while let Some(frame) = reader.next_frame()? {
+            if f_i >= init_frames {
+                break;
+            }
+            let off = refined[f_i];
+            init_acc.add_frame(&frame, off, &[]);
+            f_i += 1;
+        }
+        let init_atlas = init_acc.to_atlas();
+        for p in &tiles.platforms {
+            if p.y1 < tiles.ground_top {
+                for wy in p.y0..=p.y1 {
+                    for wx in p.x0..=p.x1 {
+                        if let Some(c) = init_atlas.pixel(wx, wy) {
+                            if c != [0, 0, 0] && color_dist(c, tiles.background) > 20 {
+                                let ax = (wx - atlas.origin[0]) as usize;
+                                let ay = (wy - atlas.origin[1]) as usize;
+                                if ax < atlas.image.width && ay < atlas.image.height {
+                                    atlas.image.set_pixel(ax, ay, c);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     Ok(Enfolded2D {
         info,
@@ -2652,5 +2857,54 @@ mod tests {
         assert_eq!(boxes.len(), 1, "boxes = {boxes:?}");
         let b = boxes[0];
         assert!(b.x0 <= 30 && b.x1 >= 35 && b.y0 <= 10 && b.y1 >= 15);
+    }
+
+    #[test]
+    fn spinor_factorization_splits_crossing_tracks() {
+        // Two 12x12 actors with distinct chromatic spinors cross at frame 4,
+        // where their bounding boxes merge into a single 20x14 composite box.
+        let mut frames: Vec<Vec<(Rect, [u8; 3])>> = Vec::new();
+        for f in 0..9 {
+            let x_a = 20 + f as i32 * 4;
+            let x_b = 52 - f as i32 * 4;
+            if f == 4 {
+                // Single merged composite box at the crossing frame
+                frames.push(vec![(
+                    Rect {
+                        x0: 32,
+                        y0: 40,
+                        x1: 51,
+                        y1: 53,
+                    },
+                    [200, 150, 100],
+                )]);
+            } else {
+                frames.push(vec![
+                    (
+                        Rect {
+                            x0: x_a,
+                            y0: 40,
+                            x1: x_a + 11,
+                            y1: 51,
+                        },
+                        [250, 60, 40],
+                    ),
+                    (
+                        Rect {
+                            x0: x_b,
+                            y0: 40,
+                            x1: x_b + 11,
+                            y1: 51,
+                        },
+                        [40, 220, 250],
+                    ),
+                ]);
+            }
+        }
+        let scroll = vec![[0, 0]; frames.len()];
+        let (tracks, _) = track_actors_coherent(&frames, &scroll, 128, true, 3);
+        assert_eq!(tracks.len(), 2, "expected 2 tracks, got {}", tracks.len());
+        assert_eq!(tracks[0].boxes.len(), 9, "track 0 should have no occlusion gap");
+        assert_eq!(tracks[1].boxes.len(), 9, "track 1 should have no occlusion gap");
     }
 }

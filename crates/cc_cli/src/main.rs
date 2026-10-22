@@ -157,18 +157,25 @@ fn cmd_inspect(args: &[String]) -> io::Result<()> {
         m.atlas[0], m.atlas[1], m.origin, m.tile, m.cols, m.rows
     );
     println!(
-        "level   viewport {}x{}, hud_top {}, ground_top y={}, gravity {:.2}, backdrop {:?}",
-        m.viewport[0], m.viewport[1], m.hud_top, m.ground_top, m.gravity, m.background
+        "level   viewport {}x{}, hud_top {}, ground_top y={}, drift {:?}, motor {:?}, backdrop {:?}",
+        m.viewport[0],
+        m.viewport[1],
+        m.hud_top,
+        m.ground_top,
+        m.env_drift,
+        m.control_motor,
+        m.background
     );
     println!(
         "tiles   empty={} solid={} oneway={} background={}",
         counts[0], counts[1], counts[2], counts[3]
     );
     println!(
-        "collide {} solid runs, {} one-way surfaces, {} collectibles",
+        "collide {} solid runs, {} one-way surfaces, {} collectibles, {} boundary blades",
         m.solids.len(),
         m.platforms.len(),
-        m.collectibles.len()
+        m.collectibles.len(),
+        m.boundaries.len()
     );
     println!("frames  {} scroll samples", m.scroll.len());
     println!(
@@ -232,1109 +239,289 @@ fn cmd_inspect(args: &[String]) -> io::Result<()> {
     Ok(())
 }
 
-/// Primary controllable/guided actor holon in a gravitational 2D world.
-/// Bounding dimensions `(w, h)` are learned directly from the compiled `.cc` manifest.
-struct Player {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-    vx: f32,
-    vy: f32,
-    phase: f32,
-    on_ground: bool,
+/// Stationary boundary holon $\mathcal{B}_k = (L_k, \mathsf{Y}_k, \rho_c)$ with directional
+/// admittance and state-idempotent transitions ($\epsilon_0 \to \epsilon_1 \to \epsilon_2$).
+struct BoundaryHolon {
+    blade: cc_field::model2d::BoundaryBlade,
+    cde: cc_math::CliffordDensityElement,
+    impulse_timer: usize,
 }
 
-const MAX_FALL: f32 = 6.5;
-const RUN: f32 = 1.6;
-const JUMP: f32 = 6.2;
-
-impl Player {
-    fn new(x: f32, y: f32, w: f32, h: f32) -> Self {
-        Self {
-            x,
-            y,
-            w,
-            h,
-            vx: 0.0,
-            vy: 0.0,
-            phase: 0.0,
-            on_ground: false,
-        }
-    }
-
-    fn step(
-        &mut self,
-        m: &Model2D,
-        block_props: &[BlockProp],
-        dir: f32,
-        jump: bool,
-    ) -> Option<usize> {
-        // Horizontal: continuous world-space check along the leading edge.
-        // Sample the lower/middle body (feet - 2, feet - 8) so overhead floating blocks
-        // that still have vertical clearance above the ground can be walked under.
-        self.vx = dir * RUN;
-        self.x += self.vx;
-        self.phase += self.vx.abs() * 0.24;
-        if dir != 0.0 {
-            let lead = if dir > 0.0 { self.x + self.w - 1.0 } else { self.x };
-            let feet = self.y + self.h;
-            for sample_y in [feet - 2.0, feet - 8.0, feet - 14.0] {
-                if let Some(r) = m.solid_at_world(lead, sample_y) {
-                    self.x = if dir > 0.0 {
-                        r[0] as f32 - self.w
-                    } else {
-                        (r[2] + 1) as f32
-                    };
-                    break;
-                }
-            }
-        }
-        self.x = self.x.max(0.0);
-
-        // Vertical: environmental acceleration field from model manifest.
-        let g = if m.manifest.gravity > 0.0 {
-            m.manifest.gravity * 0.73
-        } else {
-            0.35
-        };
-        if jump && self.on_ground {
-            self.vy = -JUMP;
-            self.on_ground = false;
-        }
-        self.vy = (self.vy + g).min(MAX_FALL);
-        let prev_feet = self.y + self.h;
-        self.y += self.vy;
-        self.on_ground = false;
-
-        if self.vy >= 0.0 {
-            let feet = self.y + self.h;
-            let mut landed_top: Option<f32> = None;
-            for sample_x in [self.x, self.x + self.w * 0.5, self.x + self.w - 1.0] {
-                if let Some(r) = m.solid_at_world(sample_x, feet) {
-                    let top = r[1] as f32;
-                    let h = (r[3] - r[1] + 1).max(4) as f32;
-                    if feet > top && prev_feet <= top + h {
-                        landed_top = Some(landed_top.map_or(top, |t| t.min(top)));
-                    }
-                } else if let Some(r) = m.one_way_at_world(sample_x, feet) {
-                    let top = r[1] as f32;
-                    if feet > top && prev_feet <= top + 2.0 {
-                        landed_top = Some(landed_top.map_or(top, |t| t.min(top)));
-                    }
-                }
-            }
-            if let Some(top) = landed_top {
-                self.y = top - self.h;
-                self.vy = 0.0;
-                self.on_ground = true;
-            }
-            None
-        } else {
-            let head_y = self.y;
-            let mut hit_prop: Option<usize> = None;
-            let mut hit_bottom: Option<f32> = None;
-            for sample_x in [self.x, self.x + self.w * 0.5, self.x + self.w - 1.0] {
-                if let Some(r) = m.solid_at_world(sample_x, head_y) {
-                    hit_bottom = Some((r[3] + 1) as f32);
-                    break;
-                }
-                let sx = sample_x.floor() as i32;
-                let sy = head_y.floor() as i32;
-                if let Some((pi, p)) = block_props.iter().enumerate().find(|(_, p)| {
-                    sx >= p.rect[0] && sx <= p.rect[2] && sy >= p.rect[1] && sy <= p.rect[3]
-                }) {
-                    hit_prop = Some(pi);
-                    hit_bottom = Some((p.rect[3] + 1) as f32);
-                    break;
-                }
-            }
-            if let Some(bot) = hit_bottom {
-                self.y = bot;
-                self.vy = 0.0;
-            }
-            hit_prop
-        }
-    }
-}
-
-/// An autonomous entity in the 2D world model.
-///
-/// Behaviors are governed by Hiley's `CliffordDensityElement`
-/// ($\rho_c = \Phi_L \widetilde{\Phi}_L = \rho U \epsilon_s \widetilde{U}$) and the
-/// kinematic excursion invariants learned during `enfold`:
-/// - State 0 ($\epsilon_0$): Active forward/outbound branch
-/// - State 1 ($\epsilon_1$): Reflected return branch
-/// - State 2 ($\epsilon_2$): Post-impact / collapsed branch ($\rho \to 0$)
-struct ActorHolon {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
+/// Mobile left-ideal holon $\mathcal{H}_i$ governed by `CliffordDensityElement`,
+/// environmental drift $\mathbf{a}_{\text{env}}$, and $\mathcal{Q}_{\text{Cl}}$ quantum torque.
+struct MobileHolon {
+    is_primary: bool,
+    pos: [f32; 2],
+    vel: [f32; 2],
+    size: [f32; 2],
     speed: f64,
     bounds_y: [f32; 2],
+    on_support: bool,
+    phase: f32,
     cde: cc_math::CliffordDensityElement,
-    sprite: Option<image::RgbaImage>,
+    sprite_idx: Option<usize>,
+    harmonic_idx: Option<usize>,
+    trajectory: std::collections::HashMap<usize, (i32, i32)>,
+    spawn_delay: usize,
+    respawn_timer: usize,
 }
 
-/// A collectible token emitted upon boundary impact (e.g. coin pop).
-struct CoinToken {
-    x: f32,
-    y: f32,
-    vy: f32,
-    timer: usize,
-}
-
-/// An interactive prop block (Bohmian process holon with discrete state transitions)
-/// represented by its continuous world-space bounding rect `rect = [x0, y0, x1, y1]`:
-/// - State 0: Active interactive prop (emits token on upward impact)
-/// - State 1: Harmonic bumping impulse phase
-/// - State 2: Spent / collapsed block (unreactive)
-struct BlockProp {
+/// Consumable or emitted localized field excitation in the medium.
+struct FieldExcitation {
     rect: [i32; 4],
-    bump_timer: usize,
-    state: u32,
+    pos: [f32; 2],
+    vel: [f32; 2],
+    color: [u8; 3],
+    timer: usize,
+    anchored: bool,
+    active: bool,
 }
 
-fn cmd_unfold(args: &[String]) -> io::Result<()> {
-    let pos = positional(args);
-    let Some(path) = pos.first() else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "unfold needs a .cc model",
-        ));
-    };
-    let model = Model2D::load(Path::new(path))?;
-    let m = &model.manifest;
-    let is_static = m.gravity <= 0.0 && m.scroll.iter().all(|s| s[0] == 0 && s[1] == 0);
-    let is_flight = m.gravity <= 0.0 && !m.scroll.iter().all(|s| s[0] == 0 && s[1] == 0);
-    let frames: usize = opt(args, "--frames")
-        .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| if is_static || is_flight { m.scroll.len().max(600) } else { 600 });
-    let capture = opt(args, "--capture").map(PathBuf::from);
-    let no_video = args.iter().any(|a| a == "--no-video");
-    let out = opt(args, "-o").map(PathBuf::from);
-    if let Some(dir) = &capture {
-        std::fs::create_dir_all(dir)?;
-    }
+/// Attached trailing wake emanating from $-\mathbf{s}_i$.
+struct AttachedWake {
+    pos: [f32; 2],
+    vel: [f32; 2],
+    color: [u8; 3],
+    timer: usize,
+    max_timer: usize,
+    radius: f32,
+}
 
-    let vw = m.viewport[0] as usize;
-    let vh = m.viewport[1] as usize;
-    let aw = model.atlas.width;
-    let ah = model.atlas.height;
-    let mut buf = vec![0u8; vw * vh * 3];
+/// Coherent directional soliton propagating along $+\mathbf{s}_i$.
+struct SolitonProjectile {
+    pos: [f32; 2],
+    vel: [f32; 2],
+    color: [u8; 3],
+}
 
-    let mut writer = match (&out, no_video) {
-        (Some(p), false) => Some(video_io::VideoWriter::create(p, vw as u32, vh as u32, 30.0)?),
-        _ => None,
-    };
+/// Radial dispersion burst produced upon holon state collapse $T_{s \to 2}$.
+struct RadialDispersion {
+    pos: [f32; 2],
+    timer: usize,
+    max_timer: usize,
+    radius: f32,
+    color: [u8; 3],
+}
 
-    if is_static {
-        struct PlanarHolon {
-            pos: Option<(f64, f64)>,
-            size: [f64; 2],
-            cde: cc_math::CliffordDensityElement,
-            trajectory: std::collections::HashMap<usize, (i32, i32)>,
-            sprite: Option<image::RgbaImage>,
-            phase: f32,
-        }
+/// Unified continuous 2D Implicate World runtime state.
+///
+/// Steps terrestrial ($a_y > 0$), planar static ($a_y = 0, \Delta \mathbf{X}_{\text{cam}} = 0$),
+/// and vertical/scrolling flight ($a_y = 0, \Delta \mathbf{X}_{\text{cam}} \neq 0$) worlds
+/// through one continuous dynamical update without per-game branching or procedural pixel shaders.
+struct WorldState2D {
+    atlas_rgb: Vec<u8>,
+    aw: usize,
+    ah: usize,
+    vw: usize,
+    vh: usize,
+    env_drift: [f32; 2],
+    control_motor: [f32; 2],
+    scroll_span: [i32; 2],
+    qfield: cc_field::QField,
+    basis: cc_math::StateBasis,
+    boundaries: Vec<BoundaryHolon>,
+    holons: Vec<MobileHolon>,
+    excitations: Vec<FieldExcitation>,
+    wakes: Vec<AttachedWake>,
+    projectiles: Vec<SolitonProjectile>,
+    dispersions: Vec<RadialDispersion>,
+    cam: [usize; 2],
+    impacts: usize,
+    excitations_absorbed: usize,
+}
 
-        // Build the continuous Clifford Quantum Potential field Q_Cl = -(∇²R)/R
-        // directly from world-space geometry (`solids`, `platforms`, `collectibles`),
-        // requiring zero tile-grid assumptions.
-        let qfield = model.build_continuous_qfield(64);
-        let basis = cc_math::StateBasis::new(3);
+impl WorldState2D {
+    fn new(model: &Model2D) -> Self {
+        let m = &model.manifest;
+        let vw = m.viewport[0].max(1) as usize;
+        let vh = m.viewport[1].max(1) as usize;
+        let aw = model.atlas.width.max(1);
+        let ah = model.atlas.height.max(1);
 
-        let mut atlas_copy = model.atlas.rgb.clone();
-        let mut collectibles: Vec<([i32; 4], bool)> =
-            m.collectibles.iter().map(|&r| (r, true)).collect();
-        let mut holons: Vec<PlanarHolon> = m
-            .tracks
-            .iter()
-            .map(|t| {
-                let trajectory: std::collections::HashMap<usize, (i32, i32)> = t
-                    .trajectory
-                    .iter()
-                    .map(|p| (p[0] as usize, (p[1], p[2])))
-                    .collect();
-                let sprite = t
-                    .sprite
-                    .and_then(|si| model.sprites.get(si as usize))
-                    .and_then(|bytes| {
-                        image::load_from_memory_with_format(bytes, image::ImageFormat::Png).ok()
-                    })
-                    .map(|img| img.to_rgba8());
-                PlanarHolon {
-                    pos: None,
-                    size: [t.size[0].max(8) as f64, t.size[1].max(8) as f64],
-                    cde: cc_math::CliffordDensityElement::new(1.0, 0.0, 0, 3, t.color),
-                    trajectory,
-                    sprite,
-                    phase: 0.0,
-                }
+        let ay = if m.env_drift[1] > 0.0 {
+            m.env_drift[1]
+        } else if m.gravity > 0.0 {
+            m.gravity * 0.73
+        } else {
+            0.0
+        };
+        let env_drift = [m.env_drift[0], ay];
+        let drive_speed = if m.control_motor[0] > 0.0 {
+            m.control_motor[0]
+        } else {
+            1.6
+        };
+        let launch_impulse = if m.control_motor[1] > 0.0 {
+            m.control_motor[1]
+        } else if ay > 0.0 {
+            (2.0 * ay * 54.0).sqrt()
+        } else {
+            0.0
+        };
+        let control_motor = [drive_speed, launch_impulse];
+
+        let min_sx = m.scroll.iter().map(|s| s[0]).min().unwrap_or(0);
+        let max_sx = m.scroll.iter().map(|s| s[0]).max().unwrap_or(0);
+        let min_sy = m.scroll.iter().map(|s| s[1]).min().unwrap_or(0);
+        let max_sy = m.scroll.iter().map(|s| s[1]).max().unwrap_or(0);
+        let scroll_span = [max_sx - min_sx, max_sy - min_sy];
+
+        let raw_blades = if m.boundaries.is_empty() {
+            model.infer_boundary_blades()
+        } else {
+            m.boundaries.clone()
+        };
+        let boundaries: Vec<BoundaryHolon> = raw_blades
+            .into_iter()
+            .map(|b| BoundaryHolon {
+                cde: cc_math::CliffordDensityElement::new(1.0, 0.0, 0, 3, b.frame_color),
+                blade: b,
+                impulse_timer: 0,
             })
             .collect();
 
-        let bg = m.background;
-        let mut absorbed = 0usize;
-        let t0 = Instant::now();
-        let mut captured = 0usize;
-
-        for frame in 0..frames {
-            for h in &mut holons {
-                if let Some(&(tx, ty)) = h.trajectory.get(&frame) {
-                    if let Some((px, py)) = h.pos {
-                        let dx = tx as f64 - px;
-                        let dy = ty as f64 - py;
-                        let ds = (dx * dx + dy * dy).sqrt() as f32;
-                        h.phase += ds * 0.40;
-                        if dx * dx + dy * dy > 0.25 && dx.abs() < (aw as f64 * 0.5) {
-                            h.cde.set_heading_angle(dy.atan2(dx));
-                        }
-                    }
-                    h.pos = Some((tx as f64, ty as f64));
-                } else if let Some((px, py)) = h.pos {
-                    // Unfold across trajectory gaps using Q_Cl quantum torque + Bohm momentum.
-                    let ux = (px / aw.max(1) as f64).clamp(0.0, 1.0);
-                    let uy = (py / ah.max(1) as f64).clamp(0.0, 1.0);
-                    let [gx, gy] = qfield.gradient_at(ux, uy);
-                    h.cde.apply_quantum_torque([-gx * 0.001, -gy * 0.001], 0.2);
-                    let [vx, vy] = h.cde.bohm_momentum(1.0);
-                    let ds = (vx * vx + vy * vy).sqrt() as f32;
-                    h.phase += ds * 0.40;
-                    let nx = (px + vx).rem_euclid(aw.max(1) as f64);
-                    let ny = (py + vy).clamp(0.0, (ah.saturating_sub(1)) as f64);
-                    let cx = (nx + h.size[0] * 0.5) as f32;
-                    let cy = (ny + h.size[1] * 0.5) as f32;
-                    if model.solid_at_world(cx, cy).is_none() {
-                        h.pos = Some((nx, ny));
-                    } else {
-                        let normal = if vx.abs() >= vy.abs() {
-                            [-vx.signum(), 0.0]
-                        } else {
-                            [0.0, -vy.signum()]
-                        };
-                        h.cde.reflect_at_boundary(normal, &basis);
-                    }
-                }
-            }
-
-            // Relational excitation absorption: when the primary holon intersects an
-            // active collectible excitation, transition the collectible to its spent state
-            // and clear its bounding box to the learned world background.
-            if let Some(primary) = holons.first() {
-                if let Some((px, py)) = primary.pos {
-                    let pcx = px + primary.size[0] * 0.5;
-                    let pcy = py + primary.size[1] * 0.5;
-                    for (rect, active) in &mut collectibles {
-                        if !*active {
-                            continue;
-                        }
-                        let cx = (rect[0] + rect[2]) as f64 * 0.5;
-                        let cy = (rect[1] + rect[3]) as f64 * 0.5;
-                        let dx = pcx - cx;
-                        let dy = pcy - cy;
-                        if dx * dx + dy * dy <= 49.0 {
-                            *active = false;
-                            absorbed += 1;
-                            for y in (rect[1] - 1).max(0)..=(rect[3] + 1).min(ah as i32 - 1) {
-                                for x in (rect[0] - 1).max(0)..=(rect[2] + 1).min(aw as i32 - 1) {
-                                    let idx = (y as usize * aw + x as usize) * 3;
-                                    atlas_copy[idx] = bg[0];
-                                    atlas_copy[idx + 1] = bg[1];
-                                    atlas_copy[idx + 2] = bg[2];
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Render background atlas + HUD
-            let hud_top = m.hud_top as usize;
-            for y in 0..vh {
-                for x in 0..vw {
-                    let i = (y * vw + x) * 3;
-                    let src = model.hud.as_ref().and_then(|hud| {
-                        let hy = y.checked_sub(hud_top)?;
-                        if hy < hud.height && x < hud.width {
-                            Some((hy * hud.width + x) * 3)
-                        } else {
-                            None
-                        }
-                    });
-                    if let Some(s) = src {
-                        let hud = model.hud.as_ref().unwrap();
-                        buf[i] = hud.rgb[s];
-                        buf[i + 1] = hud.rgb[s + 1];
-                        buf[i + 2] = hud.rgb[s + 2];
-                    } else if x < aw && y < ah {
-                        let s = (y * aw + x) * 3;
-                        buf[i] = atlas_copy[s];
-                        buf[i + 1] = atlas_copy[s + 1];
-                        buf[i + 2] = atlas_copy[s + 2];
-                    } else {
-                        buf[i] = bg[0];
-                        buf[i + 1] = bg[1];
-                        buf[i + 2] = bg[2];
-                    }
-                }
-            }
-
-            // Render holons (autonomous actors first, then primary holon)
-            let order = (1..holons.len()).chain(std::iter::once(0));
-            for ti in order {
-                let Some(h) = holons.get(ti) else {
-                    continue;
-                };
-                let Some(sprite) = &h.sprite else {
-                    continue;
-                };
-                let Some((fx, fy)) = h.pos else {
-                    continue;
-                };
-                let ax = fx.round() as i32;
-                let ay = fy.round() as i32;
-                let sw = sprite.width() as i32;
-                let sh = sprite.height() as i32;
-
-                // Heading rotor and vitality harmonics
-                let [hx, hy] = h.cde.heading_vector();
-                let theta = (hy as f32).atan2(hx as f32);
-                let moving = hx * hx + hy * hy > 0.04;
-                let chomp_open = if moving {
-                    ((h.phase).sin().abs()) * 0.95
-                } else {
-                    0.20
-                };
-                let cx = sw as f32 * 0.5;
-                let cy = sh as f32 * 0.5;
-
-                let eye_dx = if hx > 0.3 { 1 } else if hx < -0.3 { -1 } else { 0 };
-                let eye_dy = if hy > 0.3 { 1 } else if hy < -0.3 { -1 } else { 0 };
-                let skirt_shift = ((h.phase * 0.4).sin().signum().max(0.0)) as i32;
-
-                for sy in 0..sh {
-                    let dy = ay + sy;
-                    if dy < 0 || dy >= vh as i32 {
-                        continue;
-                    }
-                    for sx in 0..sw {
-                        let dx = ax + sx;
-                        if dx < 0 || dx >= vw as i32 {
-                            continue;
-                        }
-
-                        // Primary holon: dynamic wedge chomp aligned with heading rotor
-                        if ti == 0 && chomp_open > 0.08 {
-                            let diff_x = sx as f32 - cx;
-                            let diff_y = sy as f32 - cy;
-                            let dist = (diff_x * diff_x + diff_y * diff_y).sqrt();
-                            if dist >= 1.5 && dist <= cx.max(cy) + 2.0 {
-                                let ang = diff_y.atan2(diff_x);
-                                let d_theta = (ang - theta + std::f32::consts::PI)
-                                    .rem_euclid(2.0 * std::f32::consts::PI)
-                                    - std::f32::consts::PI;
-                                if d_theta.abs() < chomp_open {
-                                    continue; // open mouth wedge
-                                }
-                            }
-                        }
-
-                        // Autonomous holons: skirt wave at bottom boundary
-                        let sample_x = if ti > 0 && sy >= sh - 3 {
-                            (sx + skirt_shift).rem_euclid(sw)
-                        } else {
-                            sx
-                        };
-
-                        let mut p = sprite.get_pixel(sample_x as u32, sy as u32);
-
-                        // Autonomous holons: gaze shift according to heading
-                        if ti > 0 && (eye_dx != 0 || eye_dy != 0) {
-                            let is_eye = p[0] > 200 && p[1] > 200 && p[2] > 200;
-                            let is_pupil = p[0] < 60 && p[1] < 60 && p[2] > 140;
-                            if is_eye || is_pupil {
-                                let shifted_x = (sx - eye_dx).clamp(0, sw - 1);
-                                let shifted_y = (sy - eye_dy).clamp(0, sh - 1);
-                                let sp = sprite.get_pixel(shifted_x as u32, shifted_y as u32);
-                                if sp[0] < 60 && sp[1] < 60 && sp[2] > 140 {
-                                    p = sp; // shifted pupil
-                                }
-                            }
-                        }
-
-                        let alpha = p[3] as u32;
-                        if alpha >= 100 {
-                            let i = (dy as usize * vw + dx as usize) * 3;
-                            let inv = 255 - alpha;
-                            buf[i] = ((p[0] as u32 * alpha + buf[i] as u32 * inv) / 255) as u8;
-                            buf[i + 1] =
-                                ((p[1] as u32 * alpha + buf[i + 1] as u32 * inv) / 255) as u8;
-                            buf[i + 2] =
-                                ((p[2] as u32 * alpha + buf[i + 2] as u32 * inv) / 255) as u8;
-                        }
-                    }
-                }
-            }
-
-            if let Some(w) = writer.as_mut() {
-                w.write_frame(&buf)?;
-            }
-            if let Some(dir) = &capture {
-                if frame % 10 == 0 || frame + 1 == frames {
-                    let p = dir.join(format!("frame_{frame:05}.png"));
-                    video_io::write_png(&p, vw as u32, vh as u32, &buf)?;
-                    captured += 1;
-                }
-            }
-        }
-        let secs = t0.elapsed().as_secs_f64();
-        if let Some(w) = writer.as_mut() {
-            w.finish()?;
-        }
-        println!(
-            "unfolded {frames} frames in {:.3}s ({:.0} Hz, planar Q_Cl arena)",
-            secs,
-            frames as f64 / secs.max(1e-9)
-        );
-        if let Some((px, py)) = holons.first().and_then(|h| h.pos) {
-            println!(
-                "player ended at x={:.0} y={:.0} (world), collectibles_absorbed={absorbed}",
-                px, py
-            );
-        }
-        if let Some(dir) = &capture {
-            println!("captured {captured} frames -> {}", dir.display());
-        }
-        if let Some(p) = &out {
-            println!("video -> {}", p.display());
-        }
-        return Ok(());
-    }
-
-    if is_flight {
-        /// An autonomous entity in the continuous spatial medium.
-        struct AutonomousHolon {
-            x: f32,
-            y: f32,
-            w: f32,
-            h: f32,
-            speed: f64,
-            cde: cc_math::CliffordDensityElement,
-            sprite: Option<image::RgbaImage>,
-            spawn_timer: usize,
-            explosion_timer: usize,
-        }
-
-        /// An emitted directional soliton or projectile propagating along a heading vector.
-        struct SolitonProjectile {
-            pos: [f32; 2],
-            vel: [f32; 2],
-            color: [u8; 3],
-        }
-
-        /// An attached trailing field excitation (wake, thruster trail, or dispersion)
-        /// emanating opposite to a holon's heading vector.
-        struct AttachedWake {
-            pos: [f32; 2],
-            vel: [f32; 2],
-            color: [u8; 3],
-            timer: usize,
-            max_timer: usize,
-            radius: f32,
-        }
-
-        /// A localized consumable field excitation (prop, token, or energy node).
-        struct FieldExcitation {
-            pos: [f32; 2],
-            vel: [f32; 2],
-            color: [u8; 3],
-            timer: usize,
-        }
-
-        /// A radial dispersion burst produced when a holon undergoes a state transition.
-        struct RadialDispersion {
-            pos: [f32; 2],
-            timer: usize,
-            max_timer: usize,
-            radius: f32,
-            color: [u8; 3],
-        }
-
-        let qfield = model.build_continuous_qfield(64);
-        let basis = cc_math::StateBasis::new(3);
-
-        let player_track = model.manifest.tracks.iter().find(|t| t.kind == "player");
-        let player_sprite: Option<image::RgbaImage> = player_track.and_then(|t| {
-            let si = t.sprite? as usize;
-            let bytes = model.sprites.get(si)?;
-            image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
-                .ok()
-                .map(|img| img.to_rgba8())
-        });
-        let (pw, ph) = player_track
-            .map(|t| (t.size[0].max(16) as f32, t.size[1].max(20) as f32))
-            .unwrap_or((26.0, 36.0));
-
-        let mut holons: Vec<AutonomousHolon> = model
-            .manifest
-            .tracks
+        let mut excitations: Vec<FieldExcitation> = m
+            .collectibles
             .iter()
-            .filter(|t| t.kind != "player" && t.sprite.is_some())
-            .enumerate()
-            .map(|(idx, t)| {
-                let sprite = t.sprite.and_then(|si| {
-                    let bytes = model.sprites.get(si as usize)?;
-                    image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
-                        .ok()
-                        .map(|img| img.to_rgba8())
-                });
-                let theta0 = -std::f64::consts::FRAC_PI_2;
-                let cde = cc_math::CliffordDensityElement::new(1.0, theta0, 0, 3, t.color);
-                let w = t.size[0].max(16) as f32;
-                let h = t.size[1].max(16) as f32;
-                let sx = if t.spawn[0] > 0 && (t.spawn[0] as usize) < vw {
-                    t.spawn[0] as f32
-                } else {
-                    40.0 + ((idx * 67) % (vw.saturating_sub(80))).max(10) as f32
-                };
-                AutonomousHolon {
-                    x: sx,
-                    y: -50.0 - (idx as f32) * 45.0,
-                    w,
-                    h,
-                    speed: 1.2 + ((idx % 3) as f64) * 0.35,
-                    cde,
-                    sprite,
-                    spawn_timer: idx * 35,
-                    explosion_timer: 0,
-                }
+            .map(|&r| FieldExcitation {
+                rect: r,
+                pos: [(r[0] + r[2]) as f32 * 0.5, (r[1] + r[3]) as f32 * 0.5],
+                vel: [0.0, 0.0],
+                color: [252, 200, 48],
+                timer: usize::MAX,
+                anchored: true,
+                active: true,
             })
             .collect();
 
-        let mut projectiles: Vec<SolitonProjectile> = Vec::new();
-        let mut wakes: Vec<AttachedWake> = Vec::new();
-        let mut excitations: Vec<FieldExcitation> = Vec::new();
-        let mut dispersions: Vec<RadialDispersion> = Vec::new();
-        let mut enemies_downed = 0usize;
-        let mut tokens_absorbed = 0usize;
-        let mut score = 0u64;
+        let mut holons: Vec<MobileHolon> = Vec::new();
+        let vertical_corridor = ay <= 0.0 && scroll_span[1] > scroll_span[0] && scroll_span[1] > 8;
+        let planar_static = ay <= 0.0 && scroll_span[0] <= 4 && scroll_span[1] <= 4;
 
-        let mut px = (vw as f32) * 0.5 - pw * 0.5;
-        let mut py = (vh as f32) - ph - 24.0;
-        let t0 = Instant::now();
-        let mut captured = 0usize;
-
-        for frame in 0..frames {
-            // Primary holon continuous maneuvering across open airspace
-            let t_sec = frame as f32 / 30.0;
-            let target_px = ((vw as f32) * 0.5 - pw * 0.5)
-                + ((vw as f32) * 0.35) * (t_sec * 0.8).sin()
-                + 18.0 * (t_sec * 2.1).sin();
-            let target_py = (vh as f32) - ph - 26.0 + 12.0 * (t_sec * 1.3).cos();
-            px += (target_px - px) * 0.12;
-            py += (target_py - py) * 0.12;
-            px = px.clamp(14.0, (vw as f32) - pw - 14.0);
-            py = py.clamp((vh as f32) * 0.35, (vh as f32) - ph - 8.0);
-
-            // Emit trailing process wake attached to the holon's trailing boundary
-            wakes.push(AttachedWake {
-                pos: [
-                    px + pw * 0.5 + ((frame as f32 * 1.7).sin() * pw * 0.22),
-                    py + ph + 1.0,
-                ],
-                vel: [0.0, 1.8],
-                color: [140, 220, 255],
-                timer: 8,
-                max_timer: 8,
-                radius: 3.2,
-            });
-
-            // Emit directed soliton projectiles along forward heading
-            if frame % 7 == 0 {
-                projectiles.push(SolitonProjectile {
-                    pos: [px + pw * 0.25, py - 2.0],
-                    vel: [0.0, -8.0],
-                    color: [180, 240, 255],
-                });
-                projectiles.push(SolitonProjectile {
-                    pos: [px + pw * 0.75, py - 2.0],
-                    vel: [0.0, -8.0],
-                    color: [180, 240, 255],
-                });
-            }
-
-            // Step attached process wakes
-            for w in &mut wakes {
-                w.pos[0] += w.vel[0];
-                w.pos[1] += w.vel[1];
-                w.timer = w.timer.saturating_sub(1);
-            }
-            wakes.retain(|w| w.timer > 0);
-
-            // Step directional solitons
-            for p in &mut projectiles {
-                p.pos[0] += p.vel[0];
-                p.pos[1] += p.vel[1];
-            }
-            projectiles.retain(|p| p.pos[1] > -10.0);
-
-            // Step consumable field excitations
-            for tok in &mut excitations {
-                tok.pos[0] += tok.vel[0];
-                tok.pos[1] += tok.vel[1];
-                tok.timer = tok.timer.saturating_sub(1);
-            }
-            excitations.retain(|tok| tok.timer > 0 && tok.pos[1] < vh as f32 + 10.0);
-
-            // Step radial dispersions
-            for d in &mut dispersions {
-                d.timer = d.timer.saturating_sub(1);
-            }
-            dispersions.retain(|d| d.timer > 0);
-
-            // Camera odometry from ego motor
-            let s_idx = frame.min(m.scroll.len().saturating_sub(1));
-            let off = m.scroll[s_idx];
-            let cam_x = (off[0] - m.origin[0]).clamp(0, aw.saturating_sub(vw) as i32) as usize;
-            let cam_y = (off[1] - m.origin[1]).clamp(0, ah.saturating_sub(vh) as i32) as usize;
-
-            // Step autonomous holons
-            for (hi, h) in holons.iter_mut().enumerate() {
-                if h.explosion_timer > 0 {
-                    h.explosion_timer -= 1;
-                    if h.explosion_timer == 0 {
-                        // Re-initialize holon state upon process cycle
-                        let _ = h.cde.transition_to(0, &basis);
-                        h.cde.amplitude = 1.0;
-                        h.y = -40.0 - ((hi * 41) % 120) as f32;
-                        h.x = 24.0 + ((hi * 79 + frame * 13) % (vw.saturating_sub(60))).max(10) as f32;
-                    }
-                    continue;
-                }
-                if frame < h.spawn_timer {
-                    continue;
-                }
-
-                // Bohm momentum step
-                let [vx, vy] = h.cde.bohm_momentum(h.speed);
-                h.x += vx as f32;
-                h.y += (vy as f32).max(1.25);
-
-                // Q_Cl quantum torque steering
-                let ux = (h.x / vw.max(1) as f32).clamp(0.0, 1.0) as f64;
-                let uy = (h.y / vh.max(1) as f32).clamp(0.0, 1.0) as f64;
-                let [gx, gy] = qfield.gradient_at(ux, uy);
-                h.cde.apply_quantum_torque([-gx * 0.001, -gy * 0.001], 0.15);
-
-                // Boundary reflection at lateral walls
-                if h.x <= 16.0 {
-                    h.x = 16.0;
-                    h.cde.reflect_at_boundary([1.0, 0.0], &basis);
-                } else if h.x + h.w >= (vw as f32) - 16.0 {
-                    h.x = (vw as f32) - 16.0 - h.w;
-                    h.cde.reflect_at_boundary([-1.0, 0.0], &basis);
-                }
-
-                // Recycle at top if past bottom of viewport
-                if h.y > vh as f32 + 20.0 {
-                    h.y = -35.0;
-                    h.x = 24.0 + ((hi * 71 + frame * 17) % (vw.saturating_sub(60))).max(10) as f32;
-                }
-
-                // Projectile incidence: T_{active -> collapsed}
-                let mut hit = false;
-                projectiles.retain(|p| {
-                    if hit {
-                        return true;
-                    }
-                    if p.pos[0] >= h.x - 2.0
-                        && p.pos[0] <= h.x + h.w + 2.0
-                        && p.pos[1] >= h.y
-                        && p.pos[1] <= h.y + h.h
-                    {
-                        hit = true;
-                        false // absorb projectile
-                    } else {
-                        true
-                    }
-                });
-
-                if hit {
-                    let _ = h.cde.transition_to(2, &basis);
-                    h.cde.amplitude = 0.0;
-                    h.explosion_timer = 18;
-                    enemies_downed += 1;
-                    score += 250;
-                    dispersions.push(RadialDispersion {
-                        pos: [h.x + h.w * 0.5, h.y + h.h * 0.5],
-                        timer: 16,
-                        max_timer: 16,
-                        radius: 18.0,
-                        color: [255, 180, 40],
-                    });
-                    excitations.push(FieldExcitation {
-                        pos: [h.x + h.w * 0.5, h.y + h.h * 0.5],
-                        vel: [0.0, 0.8],
-                        color: [252, 210, 40],
-                        timer: 180,
-                    });
-                }
-            }
-
-            // Primary holon contact with field excitations: absorption T_{excitation -> 0}
-            let pcx = px + pw * 0.5;
-            let pcy = py + ph * 0.5;
-            excitations.retain(|tok| {
-                let dx = pcx - tok.pos[0];
-                let dy = pcy - tok.pos[1];
-                if dx * dx + dy * dy <= 500.0 {
-                    tokens_absorbed += 1;
-                    score += 500;
-                    false // absorbed
-                } else {
-                    true
-                }
-            });
-
-            // Render world atlas
-            for y in 0..vh {
-                let sy = (cam_y + y).min(ah.saturating_sub(1));
-                for x in 0..vw {
-                    let sx = (cam_x + x).min(aw.saturating_sub(1));
-                    let i = (y * vw + x) * 3;
-                    let s = (sy * aw + sx) * 3;
-                    buf[i] = model.atlas.rgb[s];
-                    buf[i + 1] = model.atlas.rgb[s + 1];
-                    buf[i + 2] = model.atlas.rgb[s + 2];
-                }
-            }
-
-            // Render attached process wakes
-            for w in &wakes {
-                let wx = w.pos[0].round() as i32;
-                let wy = w.pos[1].round() as i32;
-                let rad = (w.radius * (w.timer as f32 / w.max_timer as f32)).max(1.0) as i32;
-                let alpha_scale = w.timer as f32 / w.max_timer as f32;
-                for dy in -rad..=rad {
-                    let py_pix = wy + dy;
-                    if py_pix < 0 || py_pix >= vh as i32 {
-                        continue;
-                    }
-                    for dx in -rad..=rad {
-                        let px_pix = wx + dx;
-                        if px_pix < 0 || px_pix >= vw as i32 {
-                            continue;
-                        }
-                        if dx * dx + dy * dy <= rad * rad {
-                            let idx = (py_pix as usize * vw + px_pix as usize) * 3;
-                            let c = w.color;
-                            buf[idx] = (buf[idx] as f32 * (1.0 - alpha_scale * 0.6)
-                                + c[0] as f32 * alpha_scale * 0.6) as u8;
-                            buf[idx + 1] = (buf[idx + 1] as f32 * (1.0 - alpha_scale * 0.6)
-                                + c[1] as f32 * alpha_scale * 0.6) as u8;
-                            buf[idx + 2] = (buf[idx + 2] as f32 * (1.0 - alpha_scale * 0.6)
-                                + c[2] as f32 * alpha_scale * 0.6) as u8;
-                        }
-                    }
-                }
-            }
-
-            // Render consumable field excitations
-            for tok in &excitations {
-                let tx = tok.pos[0].round() as i32;
-                let ty = tok.pos[1].round() as i32;
-                let rot = (frame * 6) % 360;
-                let r_rad = (rot as f32).to_radians();
-                let scale = 0.8 + 0.2 * (r_rad * 2.0).sin();
-                let rad = (5.0 * scale) as i32;
-                for dy in -rad..=rad {
-                    let py_pix = ty + dy;
-                    if py_pix < 0 || py_pix >= vh as i32 {
-                        continue;
-                    }
-                    for dx in -rad..=rad {
-                        let px_pix = tx + dx;
-                        if px_pix < 0 || px_pix >= vw as i32 {
-                            continue;
-                        }
-                        let dist = dx.abs() + dy.abs();
-                        if dist <= rad + 1 {
-                            let idx = (py_pix as usize * vw + px_pix as usize) * 3;
-                            let rgb = if dist <= 1 {
-                                [255u8, 255, 230]
-                            } else {
-                                tok.color
-                            };
-                            buf[idx] = rgb[0];
-                            buf[idx + 1] = rgb[1];
-                            buf[idx + 2] = rgb[2];
-                        }
-                    }
-                }
-            }
-
-            // Render autonomous holons
-            for h in &holons {
-                if h.explosion_timer > 0 || frame < h.spawn_timer {
-                    continue;
-                }
-                let ax = h.x.round() as i32;
-                let ay = h.y.round() as i32;
-                if let Some(sprite) = &h.sprite {
-                    let sw = sprite.width() as i32;
-                    let sh = sprite.height() as i32;
-                    for sy in 0..sh {
-                        let dy = ay + sy;
-                        if dy < 0 || dy >= vh as i32 {
-                            continue;
-                        }
-                        for sx in 0..sw {
-                            let dx = ax + sx;
-                            if dx < 0 || dx >= vw as i32 {
-                                continue;
-                            }
-                            let p = sprite.get_pixel(sx as u32, sy as u32);
-                            let alpha = p[3] as u32;
-                            if alpha >= 90 {
-                                let i = (dy as usize * vw + dx as usize) * 3;
-                                let inv = 255 - alpha;
-                                buf[i] = ((p[0] as u32 * alpha + buf[i] as u32 * inv) / 255) as u8;
-                                buf[i + 1] =
-                                    ((p[1] as u32 * alpha + buf[i + 1] as u32 * inv) / 255) as u8;
-                                buf[i + 2] =
-                                    ((p[2] as u32 * alpha + buf[i + 2] as u32 * inv) / 255) as u8;
-                            }
-                        }
-                    }
-                } else {
-                    for y in ay.max(0)..(ay + h.h as i32).min(vh as i32) {
-                        for x in ax.max(0)..(ax + h.w as i32).min(vw as i32) {
-                            let i = (y as usize * vw + x as usize) * 3;
-                            buf[i] = 180;
-                            buf[i + 1] = 60;
-                            buf[i + 2] = 60;
-                        }
-                    }
-                }
-            }
-
-            // Render radial dispersions (state transition energy release)
-            for d in &dispersions {
-                let bx = d.pos[0].round() as i32;
-                let by = d.pos[1].round() as i32;
-                let progress = 1.0 - (d.timer as f32 / d.max_timer as f32);
-                let radius = (6.0 + progress * d.radius) as i32;
-                for dy in -radius..=radius {
-                    let py_pix = by + dy;
-                    if py_pix < 0 || py_pix >= vh as i32 {
-                        continue;
-                    }
-                    for dx in -radius..=radius {
-                        let px_pix = bx + dx;
-                        if px_pix < 0 || px_pix >= vw as i32 {
-                            continue;
-                        }
-                        let d2 = dx * dx + dy * dy;
-                        let r2 = radius * radius;
-                        if d2 <= r2 {
-                            let idx = (py_pix as usize * vw + px_pix as usize) * 3;
-                            let frac = (d2 as f32 / r2 as f32).sqrt();
-                            let rgb = if frac < 0.35 {
-                                [255u8, 255, 240]
-                            } else if frac < 0.7 {
-                                d.color
-                            } else {
-                                [220u8, 60, 20]
-                            };
-                            buf[idx] = ((buf[idx] as u32 + rgb[0] as u32) / 2) as u8;
-                            buf[idx + 1] = ((buf[idx + 1] as u32 + rgb[1] as u32) / 2) as u8;
-                            buf[idx + 2] = ((buf[idx + 2] as u32 + rgb[2] as u32) / 2) as u8;
-                        }
-                    }
-                }
-            }
-
-            // Render directional solitons
-            for p in &projectiles {
-                let bx = p.pos[0].round() as i32;
-                let by = p.pos[1].round() as i32;
-                for dy in -4i32..=4 {
-                    let py_pix = by + dy;
-                    if py_pix < 0 || py_pix >= vh as i32 {
-                        continue;
-                    }
-                    for dx in -1i32..=1 {
-                        let px_pix = bx + dx;
-                        if px_pix < 0 || px_pix >= vw as i32 {
-                            continue;
-                        }
-                        let idx = (py_pix as usize * vw + px_pix as usize) * 3;
-                        let rgb = if dx == 0 && dy.abs() <= 2 {
-                            [255u8, 255, 255]
-                        } else {
-                            p.color
-                        };
-                        buf[idx] = rgb[0];
-                        buf[idx + 1] = rgb[1];
-                        buf[idx + 2] = rgb[2];
-                    }
-                }
-            }
-
-            // Render primary holon
-            let pl_x = px.round() as i32;
-            let pl_y = py.round() as i32;
-            if let Some(sprite) = &player_sprite {
-                let sw = sprite.width() as i32;
-                let sh = sprite.height() as i32;
-                for sy in 0..sh {
-                    let dy = pl_y + sy;
-                    if dy < 0 || dy >= vh as i32 {
-                        continue;
-                    }
-                    for sx in 0..sw {
-                        let dx = pl_x + sx;
-                        if dx < 0 || dx >= vw as i32 {
-                            continue;
-                        }
-                        let p = sprite.get_pixel(sx as u32, sy as u32);
-                        let alpha = p[3] as u32;
-                        if alpha >= 90 {
-                            let i = (dy as usize * vw + dx as usize) * 3;
-                            let inv = 255 - alpha;
-                            buf[i] = ((p[0] as u32 * alpha + buf[i] as u32 * inv) / 255) as u8;
-                            buf[i + 1] =
-                                ((p[1] as u32 * alpha + buf[i + 1] as u32 * inv) / 255) as u8;
-                            buf[i + 2] =
-                                ((p[2] as u32 * alpha + buf[i + 2] as u32 * inv) / 255) as u8;
-                        }
-                    }
-                }
+        // Instantiate primary holon
+        let primary_track = m
+            .tracks
+            .iter()
+            .find(|t| t.kind == "player")
+            .or_else(|| m.tracks.first());
+        if let Some(pt) = primary_track {
+            let (pw, ph) = if ay > 0.0 {
+                (
+                    (pt.size[0] - 4).max(10) as f32,
+                    (pt.size[1] - 2).max(14) as f32,
+                )
             } else {
-                for y in pl_y.max(0)..(pl_y + ph as i32).min(vh as i32) {
-                    for x in pl_x.max(0)..(pl_x + pw as i32).min(vw as i32) {
-                        let i = (y as usize * vw + x as usize) * 3;
-                        buf[i] = 70;
-                        buf[i + 1] = 180;
-                        buf[i + 2] = 240;
-                    }
-                }
-            }
-
-            // Render HUD overlay (top status / side status)
-            if let Some(hud) = &model.hud {
-                let hud_top = m.hud_top as usize;
-                if hud_top < vh && hud.height > 0 {
-                    for y in 0..hud.height.min(vh.saturating_sub(hud_top)) {
-                        let dy = hud_top + y;
-                        for x in 0..hud.width.min(vw) {
-                            let s = (y * hud.width + x) * 3;
-                            let i = (dy * vw + x) * 3;
-                            buf[i] = hud.rgb[s];
-                            buf[i + 1] = hud.rgb[s + 1];
-                            buf[i + 2] = hud.rgb[s + 2];
-                        }
-                    }
-                }
-            }
-
-            if let Some(w) = writer.as_mut() {
-                w.write_frame(&buf)?;
-            }
-            if let Some(dir) = &capture {
-                if frame % 10 == 0 || frame + 1 == frames {
-                    let p = dir.join(format!("frame_{frame:05}.png"));
-                    video_io::write_png(&p, vw as u32, vh as u32, &buf)?;
-                    captured += 1;
-                }
-            }
-        }
-
-        let secs = t0.elapsed().as_secs_f64();
-        if let Some(w) = writer.as_mut() {
-            w.finish()?;
-        }
-        println!(
-            "unfolded {frames} frames in {:.3}s ({:.0} Hz, planar Q_Cl flight corridor)",
-            secs,
-            frames as f64 / secs.max(1e-9)
-        );
-        println!(
-            "player ended at x={:.1} y={:.1} (world), enemies_downed={enemies_downed}, bonus_collected={tokens_absorbed}, score={score}",
-            px, py
-        );
-        if let Some(dir) = &capture {
-            println!("captured {captured} frames -> {}", dir.display());
-        }
-        if let Some(p) = &out {
-            println!("video -> {}", p.display());
-        }
-        return Ok(());
-    }
-
-    // Load canonical player sprite and learned bounding dimensions from the model.
-    let player_track = model.manifest.tracks.iter().find(|t| t.kind == "player");
-    let player_sprite: Option<image::RgbaImage> = player_track.and_then(|t| {
-        let si = t.sprite? as usize;
-        let bytes = model.sprites.get(si)?;
-        image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
-            .ok()
-            .map(|img| img.to_rgba8())
-    });
-    let (pw, ph) = player_track
-        .map(|t| ((t.size[0] - 4).max(10) as f32, (t.size[1] - 2).max(14) as f32))
-        .unwrap_or((12.0, 24.0));
-    let spawn_x = 32.0f32;
-    let spawn_y = (m.ground_top as f32 - ph - 1.0).max(0.0);
-    let mut player = Player::new(spawn_x, spawn_y, pw, ph);
-
-    // Instantiate autonomous actor holons from all non-player tracks using their
-    // learned world-space excursion tensor `t.span` to orient the initial spinor rotor.
-    // Grounding in the implicate order: terrestrial processes are coupled to their supporting manifold.
-    let mut actors: Vec<ActorHolon> = model
-        .manifest
-        .tracks
-        .iter()
-        .filter(|t| t.kind != "player" && t.spawn[0] > 0)
-        .map(|t| {
-            let sprite = t.sprite.and_then(|si| {
-                let bytes = model.sprites.get(si as usize)?;
-                image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
-                    .ok()
-                    .map(|img| img.to_rgba8())
-            });
-            // Principal mobility axis from observed world-space excursion [dx, dy]:
-            // if dy > 2 * dx, the process oscillates along e2 (-π/2); otherwise along e1 (π).
-            let vertical_mode = t.span[1] > 2 * t.span[0].max(1);
-            let theta0 = if vertical_mode {
+                (pt.size[0].max(8) as f32, pt.size[1].max(8) as f32)
+            };
+            let (sx, sy) = if ay > 0.0 {
+                (32.0f32, (m.ground_top as f32 - ph - 1.0).max(0.0))
+            } else if vertical_corridor {
+                ((vw as f32) * 0.5 - pw * 0.5, (vh as f32) - ph - 24.0)
+            } else {
+                (pt.spawn[0] as f32, pt.spawn[1] as f32)
+            };
+            let trajectory: std::collections::HashMap<usize, (i32, i32)> = pt
+                .trajectory
+                .iter()
+                .map(|p| (p[0] as usize, (p[1], p[2])))
+                .collect();
+            let theta0 = if vertical_corridor {
                 -std::f64::consts::FRAC_PI_2
             } else {
-                std::f64::consts::PI
+                0.0
             };
-            let cde = cc_math::CliffordDensityElement::new(1.0, theta0, 0, 3, t.color);
-            let hw = t.size[0] as f32;
-            let hh = t.size[1] as f32;
-            let spawn_x = t.spawn[0] as f32;
-            let spawn_y = if m.gravity > 0.0 && !vertical_mode {
+            holons.push(MobileHolon {
+                is_primary: true,
+                pos: [sx, sy],
+                vel: [0.0, 0.0],
+                size: [pw, ph],
+                speed: drive_speed as f64,
+                bounds_y: [0.0, ah as f32],
+                on_support: false,
+                phase: 0.0,
+                cde: cc_math::CliffordDensityElement::new(1.0, theta0, 0, 3, pt.color),
+                sprite_idx: pt.sprite.map(|i| i as usize),
+                harmonic_idx: pt.harmonic_sprite.map(|i| i as usize),
+                trajectory,
+                spawn_delay: 0,
+                respawn_timer: 0,
+            });
+        } else if ay > 0.0 {
+            holons.push(MobileHolon {
+                is_primary: true,
+                pos: [32.0, (m.ground_top as f32 - 25.0).max(0.0)],
+                vel: [0.0, 0.0],
+                size: [12.0, 24.0],
+                speed: drive_speed as f64,
+                bounds_y: [0.0, ah as f32],
+                on_support: true,
+                phase: 0.0,
+                cde: cc_math::CliffordDensityElement::new(1.0, 0.0, 0, 3, [240, 80, 60]),
+                sprite_idx: None,
+                harmonic_idx: None,
+                trajectory: std::collections::HashMap::new(),
+                spawn_delay: 0,
+                respawn_timer: 0,
+            });
+        }
+
+        // Instantiate autonomous holons
+        let mut auto_idx = 0usize;
+        for (ti, t) in m.tracks.iter().enumerate() {
+            if (t.kind == "player" && ti == 0) || (ay > 0.0 && t.kind == "player") {
+                continue;
+            }
+            if ay > 0.0 && t.spawn[0] <= 0 {
+                continue;
+            }
+            if vertical_corridor && t.sprite.is_none() {
+                continue;
+            }
+            let vertical_mode = vertical_corridor || t.span[1] > 2 * t.span[0].max(1);
+            let theta0 = if vertical_mode {
+                -std::f64::consts::FRAC_PI_2
+            } else if ay > 0.0 {
+                std::f64::consts::PI
+            } else {
+                0.0
+            };
+            let hw = t.size[0].max(8) as f32;
+            let hh = t.size[1].max(8) as f32;
+            let spawn_x = if vertical_corridor {
+                if t.spawn[0] > 0 && (t.spawn[0] as usize) < vw {
+                    t.spawn[0] as f32
+                } else {
+                    40.0 + ((auto_idx * 67) % (vw.saturating_sub(80))).max(10) as f32
+                }
+            } else {
+                t.spawn[0] as f32
+            };
+            let spawn_y = if vertical_corridor {
+                -50.0 - (auto_idx as f32) * 45.0
+            } else if ay > 0.0 && !vertical_mode {
                 let center_x = spawn_x + hw * 0.5;
                 let feet_est = t.spawn[1] as f32 + hh;
                 let mut best_surface: Option<f32> = None;
-                for s in &model.manifest.solids {
-                    if (center_x as i32) >= s[0] && (center_x as i32) <= s[2] {
-                        let top = s[1] as f32;
+                for b in &boundaries {
+                    if b.blade.permeability == [0.0, 0.0, 0.0, 0.0]
+                        && (center_x as i32) >= b.blade.rect[0]
+                        && (center_x as i32) <= b.blade.rect[2]
+                    {
+                        let top = b.blade.rect[1] as f32;
                         if (top - feet_est).abs() <= 24.0 {
-                            best_surface = Some(best_surface.map_or(top, |t| t.min(top)));
+                            best_surface = Some(best_surface.map_or(top, |cur| cur.min(top)));
                         }
                     }
                 }
                 if best_surface.is_none() {
-                    for p in &model.manifest.platforms {
-                        if (center_x as i32) >= p[0] && (center_x as i32) <= p[2] {
-                            let top = p[1] as f32;
+                    for b in &boundaries {
+                        if b.blade.permeability[2] == 0.0
+                            && (center_x as i32) >= b.blade.rect[0]
+                            && (center_x as i32) <= b.blade.rect[2]
+                        {
+                            let top = b.blade.rect[1] as f32;
                             if (top - feet_est).abs() <= 24.0 {
-                                best_surface = Some(best_surface.map_or(top, |t| t.min(top)));
+                                best_surface = Some(best_surface.map_or(top, |cur| cur.min(top)));
                             }
                         }
                     }
@@ -1344,180 +531,360 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                 t.spawn[1] as f32
             };
             let amp_y = (t.span[1].max(16)) as f32;
-            ActorHolon {
-                x: spawn_x,
-                y: spawn_y,
-                w: hw,
-                h: hh,
-                speed: if vertical_mode { 0.35 } else { 0.5 },
+            let trajectory: std::collections::HashMap<usize, (i32, i32)> = if planar_static {
+                t.trajectory
+                    .iter()
+                    .map(|p| (p[0] as usize, (p[1], p[2])))
+                    .collect()
+            } else {
+                std::collections::HashMap::new()
+            };
+            let speed = if vertical_corridor {
+                1.2 + ((auto_idx % 3) as f64) * 0.35
+            } else if vertical_mode {
+                0.35
+            } else if ay > 0.0 {
+                0.5
+            } else {
+                1.0
+            };
+            let spawn_delay = if vertical_corridor {
+                auto_idx * 35
+            } else if planar_static {
+                t.trajectory.first().map(|p| p[0].max(0) as usize).unwrap_or(0)
+            } else {
+                0
+            };
+            holons.push(MobileHolon {
+                is_primary: false,
+                pos: [spawn_x, spawn_y],
+                vel: [0.0, 0.0],
+                size: [hw, hh],
+                speed,
                 bounds_y: [spawn_y - amp_y, spawn_y],
-                cde,
-                sprite,
-            }
-        })
-        .collect();
+                on_support: false,
+                phase: 0.0,
+                cde: cc_math::CliffordDensityElement::new(1.0, theta0, 0, 3, t.color),
+                sprite_idx: t.sprite.map(|i| i as usize),
+                harmonic_idx: t.harmonic_sprite.map(|i| i as usize),
+                trajectory,
+                spawn_delay,
+                respawn_timer: 0,
+            });
+            auto_idx += 1;
+        }
 
-    // Interactive block props: discovered directly from continuous `m.platforms`
-    // segments that have open backdrop space underneath (`is_open_below_rect`),
-    // subdivided into square interactive units of side `h = r[3] - r[1] + 1`.
-    let mut block_props: Vec<BlockProp> = Vec::new();
-    for &r in &m.platforms {
-        if r[3] < m.ground_top && model.is_open_below_rect(r) {
-            let side = (r[3] - r[1] + 1).max(8);
-            let mut sx = r[0];
-            while sx <= r[2] {
-                let ex = (sx + side - 1).min(r[2]);
-                block_props.push(BlockProp {
-                    rect: [sx, r[1], ex, r[3]],
-                    bump_timer: 0,
-                    state: 0,
-                });
-                sx += side;
-            }
+        // Ensure excitations list is ready for runtime emissions
+        excitations.reserve(16);
+
+        Self {
+            atlas_rgb: model.atlas.rgb.clone(),
+            aw,
+            ah,
+            vw,
+            vh,
+            env_drift,
+            control_motor,
+            scroll_span,
+            qfield: model.build_continuous_qfield(64),
+            basis: cc_math::StateBasis::new(3),
+            boundaries,
+            holons,
+            excitations,
+            wakes: Vec::new(),
+            projectiles: Vec::new(),
+            dispersions: Vec::new(),
+            cam: [0, 0],
+            impacts: 0,
+            excitations_absorbed: 0,
         }
     }
-    let mut coins: Vec<CoinToken> = Vec::new();
-    let mut coins_collected = 0usize;
-    let mut impacts = 0usize;
-    let t0 = Instant::now();
-    let mut captured = 0usize;
-    for frame in 0..frames {
-        let prev_feet = player.y + player.h;
-        // Continuous world-space probes ahead and above the player holon.
-        let ahead = player.x + player.w + 12.0;
-        let foot_y = player.y + player.h + 2.0;
-        let body_y = player.y + player.h - 8.0;
-        let wall = model.solid_at_world(ahead, body_y).is_some();
-        let platform = (1..=4).any(|k| {
-            let probe_y = foot_y - k as f32 * 16.0;
-            model.one_way_at_world(ahead, probe_y).is_some()
-                && !block_props.iter().any(|p| {
-                    p.state == 0
-                        && coins_collected == 0
-                        && ahead.floor() as i32 >= p.rect[0]
-                        && ahead.floor() as i32 <= p.rect[2]
-                        && probe_y.floor() as i32 >= p.rect[1]
-                        && probe_y.floor() as i32 <= p.rect[3]
-                })
-        });
-        let gap = model.solid_at_world(ahead, foot_y).is_none()
-            && model.one_way_at_world(ahead, foot_y).is_none();
-        let center_x = (player.x + player.w * 0.5).floor() as i32;
-        let foot_yi = foot_y.floor() as i32;
-        let under_coin_box = player.on_ground
-            && coins_collected == 0
-            && block_props.iter().any(|p| {
-                p.state == 0
-                    && center_x >= p.rect[0]
-                    && center_x <= p.rect[2]
-                    && p.rect[3] < foot_yi
-                    && (foot_yi - p.rect[1]) <= 68
-            });
-        let approaching_coin_box = coins_collected == 0
-            && block_props.iter().any(|p| {
-                p.state == 0
-                    && p.rect[0] > center_x
-                    && (p.rect[0] - center_x) <= 48
-                    && p.rect[3] < foot_yi
-                    && (foot_yi - p.rect[1]) <= 68
-            });
-        // An actor is ahead on the path -> jump at parabolic distance to land on it.
-        let actor_ahead = !approaching_coin_box
-            && actors.iter().any(|a| {
-                a.cde.state() != 2
-                    && (a.x - (player.x + player.w)) > 40.0
-                    && (a.x - (player.x + player.w)) < 62.0
-                    && (a.y + a.h - (player.y + player.h)).abs() < 24.0
-            });
-        let jump = player.on_ground
-            && (wall || platform || actor_ahead || under_coin_box || (gap && frame % 3 == 0));
-        let hit = player.step(&model, &block_props, 1.0, jump);
-        if let Some(pi) = hit {
-            if let Some(prop) = block_props.get_mut(pi) {
-                if prop.state == 0 {
-                    prop.state = 1;
-                    prop.bump_timer = 8;
-                    coins_collected += 1;
-                    coins.push(CoinToken {
-                        x: prop.rect[0] as f32 + 4.0,
-                        y: prop.rect[1] as f32 - 4.0,
-                        vy: -3.5,
-                        timer: 16,
+
+    /// Advance the implicate world state by one tick `frame` under environmental
+    /// drift $\mathbf{a}_{\text{env}}$, boundary admittance $\mathsf{Y}_k$, and
+    /// $\mathcal{Q}_{\text{Cl}}$ quantum torque.
+    fn step(&mut self, model: &Model2D, frame: usize) {
+        let m = &model.manifest;
+        let ay = self.env_drift[1];
+        let drive_speed = self.control_motor[0];
+        let launch_impulse = self.control_motor[1];
+        let vertical_corridor =
+            ay <= 0.0 && self.scroll_span[1] > self.scroll_span[0] && self.scroll_span[1] > 8;
+        let planar_static = ay <= 0.0 && self.scroll_span[0] <= 4 && self.scroll_span[1] <= 4;
+
+        // 1. Step stationary boundary holons (impulse relaxation T_{1 -> 2}).
+        for b in &mut self.boundaries {
+            if b.impulse_timer > 0 {
+                b.impulse_timer -= 1;
+                if b.impulse_timer == 0 {
+                    let _ = b.cde.transition_to(2, &self.basis);
+                }
+            }
+        }
+
+        // 2. Step secondary field excitations, wakes, solitons, and radial dispersions.
+        for w in &mut self.wakes {
+            w.pos[0] += w.vel[0];
+            w.pos[1] += w.vel[1];
+            w.timer = w.timer.saturating_sub(1);
+        }
+        self.wakes.retain(|w| w.timer > 0);
+
+        for p in &mut self.projectiles {
+            p.pos[0] += p.vel[0];
+            p.pos[1] += p.vel[1];
+        }
+        self.projectiles
+            .retain(|p| p.pos[1] > -10.0 && p.pos[1] < self.vh as f32 + 10.0);
+
+        for tok in &mut self.excitations {
+            if !tok.anchored && tok.active {
+                tok.pos[0] += tok.vel[0];
+                tok.pos[1] += tok.vel[1];
+                if ay > 0.0 {
+                    tok.vel[1] += 0.25;
+                }
+                tok.timer = tok.timer.saturating_sub(1);
+                if tok.timer == 0 || tok.pos[1] > self.ah.max(self.vh) as f32 + 16.0 {
+                    tok.active = false;
+                }
+            }
+        }
+        self.excitations.retain(|tok| tok.active);
+
+        for d in &mut self.dispersions {
+            d.timer = d.timer.saturating_sub(1);
+        }
+        self.dispersions.retain(|d| d.timer > 0);
+
+        // 3. Step primary holon (index 0) and autonomous holons.
+        let mut prev_primary_feet = 0.0f32;
+        if let Some(primary) = self.holons.first() {
+            prev_primary_feet = primary.pos[1] + primary.size[1];
+        }
+
+        if ay > 0.0 {
+            // Terrestrial drift regime: geodesic forward drive + boundary-probed launch motor.
+            let mut hit_boundary: Option<usize> = None;
+            if let Some(p) = self.holons.first() {
+                let px = p.pos[0];
+                let py = p.pos[1];
+                let pw = p.size[0];
+                let ph = p.size[1];
+                let ahead = px + pw + 12.0;
+                let foot_y = py + ph + 2.0;
+                let body_y = py + ph - 8.0;
+                let wall = model.solid_at_world(ahead, body_y).is_some();
+                let elevated_surface = (1..=4).any(|k| {
+                    let probe_y = foot_y - k as f32 * 16.0;
+                    model.one_way_at_world(ahead, probe_y).is_some()
+                        && !self.boundaries.iter().any(|b| {
+                            b.blade.excitable
+                                && b.cde.state() == 0
+                                && self.excitations_absorbed == 0
+                                && ahead.floor() as i32 >= b.blade.rect[0]
+                                && ahead.floor() as i32 <= b.blade.rect[2]
+                                && probe_y.floor() as i32 >= b.blade.rect[1]
+                                && probe_y.floor() as i32 <= b.blade.rect[3]
+                        })
+                });
+                let gap = model.solid_at_world(ahead, foot_y).is_none()
+                    && model.one_way_at_world(ahead, foot_y).is_none();
+                let center_x = (px + pw * 0.5).floor() as i32;
+                let foot_yi = foot_y.floor() as i32;
+                let under_excitable = p.on_support
+                    && self.excitations_absorbed == 0
+                    && self.boundaries.iter().any(|b| {
+                        b.blade.excitable
+                            && b.cde.state() == 0
+                            && center_x >= b.blade.rect[0]
+                            && center_x <= b.blade.rect[2]
+                            && b.blade.rect[3] < foot_yi
+                            && (foot_yi - b.blade.rect[1]) <= 68
                     });
+                let approaching_excitable = self.excitations_absorbed == 0
+                    && self.boundaries.iter().any(|b| {
+                        b.blade.excitable
+                            && b.cde.state() == 0
+                            && b.blade.rect[0] > center_x
+                            && (b.blade.rect[0] - center_x) <= 48
+                            && b.blade.rect[3] < foot_yi
+                            && (foot_yi - b.blade.rect[1]) <= 68
+                    });
+                let actor_ahead = !approaching_excitable
+                    && self.holons.iter().skip(1).any(|a| {
+                        a.cde.state() != 2
+                            && (a.pos[0] - (px + pw)) > 40.0
+                            && (a.pos[0] - (px + pw)) < 62.0
+                            && (a.pos[1] + a.size[1] - (py + ph)).abs() < 24.0
+                    });
+                let launch = p.on_support
+                    && (wall
+                        || elevated_surface
+                        || actor_ahead
+                        || under_excitable
+                        || (gap && frame % 3 == 0));
+
+                if let Some(p) = self.holons.first_mut() {
+                    p.vel[0] = drive_speed;
+                    p.pos[0] += p.vel[0];
+                    p.phase += p.vel[0].abs() * 0.24;
+                    let lead = p.pos[0] + p.size[0] - 1.0;
+                    let feet = p.pos[1] + p.size[1];
+                    for sample_y in [feet - 2.0, feet - 8.0, feet - 14.0] {
+                        if let Some(r) = model.solid_at_world(lead, sample_y) {
+                            p.pos[0] = r[0] as f32 - p.size[0];
+                            break;
+                        }
+                    }
+                    p.pos[0] = p.pos[0].max(0.0);
+
+                    if launch && p.on_support {
+                        p.vel[1] = -launch_impulse;
+                        p.on_support = false;
+                    }
+                    p.vel[1] = (p.vel[1] + ay).min(6.5);
+                    let prev_feet = p.pos[1] + p.size[1];
+                    p.pos[1] += p.vel[1];
+                    p.on_support = false;
+
+                    if p.vel[1] >= 0.0 {
+                        let feet = p.pos[1] + p.size[1];
+                        let mut landed_top: Option<f32> = None;
+                        for sample_x in
+                            [p.pos[0], p.pos[0] + p.size[0] * 0.5, p.pos[0] + p.size[0] - 1.0]
+                        {
+                            if let Some(r) = model.solid_at_world(sample_x, feet) {
+                                let top = r[1] as f32;
+                                let h = (r[3] - r[1] + 1).max(4) as f32;
+                                if feet > top && prev_feet <= top + h {
+                                    landed_top = Some(landed_top.map_or(top, |t| t.min(top)));
+                                }
+                            } else if let Some(r) = model.one_way_at_world(sample_x, feet) {
+                                let top = r[1] as f32;
+                                if feet > top && prev_feet <= top + 2.0 {
+                                    landed_top = Some(landed_top.map_or(top, |t| t.min(top)));
+                                }
+                            }
+                        }
+                        if let Some(top) = landed_top {
+                            p.pos[1] = top - p.size[1];
+                            p.vel[1] = 0.0;
+                            p.on_support = true;
+                        }
+                    } else {
+                        let head_y = p.pos[1];
+                        let mut hit_bottom: Option<f32> = None;
+                        for sample_x in
+                            [p.pos[0], p.pos[0] + p.size[0] * 0.5, p.pos[0] + p.size[0] - 1.0]
+                        {
+                            if let Some(r) = model.solid_at_world(sample_x, head_y) {
+                                hit_bottom = Some((r[3] + 1) as f32);
+                                break;
+                            }
+                            let sx = sample_x.floor() as i32;
+                            let sy = head_y.floor() as i32;
+                            if let Some((bi, b)) =
+                                self.boundaries.iter().enumerate().find(|(_, b)| {
+                                    b.blade.permeability[3] == 0.0
+                                        && sx >= b.blade.rect[0]
+                                        && sx <= b.blade.rect[2]
+                                        && sy >= b.blade.rect[1]
+                                        && sy <= b.blade.rect[3]
+                                })
+                            {
+                                hit_boundary = Some(bi);
+                                hit_bottom = Some((b.blade.rect[3] + 1) as f32);
+                                break;
+                            }
+                        }
+                        if let Some(bot) = hit_bottom {
+                            p.pos[1] = bot;
+                            p.vel[1] = 0.0;
+                        }
+                    }
                 }
             }
-        }
 
-        for prop in &mut block_props {
-            if prop.bump_timer > 0 {
-                prop.bump_timer -= 1;
-                if prop.bump_timer == 0 {
-                    prop.state = 2; // Collapse to spent empty block
+            if let Some(bi) = hit_boundary {
+                if let Some(b) = self.boundaries.get_mut(bi) {
+                    if b.blade.excitable && b.cde.state() == 0 {
+                        let _ = b.cde.transition_to(1, &self.basis);
+                        b.impulse_timer = 8;
+                        self.excitations_absorbed += 1;
+                        self.excitations.push(FieldExcitation {
+                            rect: b.blade.rect,
+                            pos: [b.blade.rect[0] as f32 + 4.0, b.blade.rect[1] as f32 - 4.0],
+                            vel: [0.0, -3.5],
+                            color: [252, 200, 40],
+                            timer: 16,
+                            anchored: false,
+                            active: true,
+                        });
+                    }
                 }
             }
-        }
-        for c in &mut coins {
-            c.y += c.vy;
-            c.vy += 0.25;
-            c.timer = c.timer.saturating_sub(1);
-        }
-        coins.retain(|c| c.timer > 0);
 
-        // Clifford-guided Bohm momentum evolution and boundary reflection.
-        let basis = cc_math::idempotent::StateBasis::new(3);
-        let view_right = player.x + vw as f32;
-        for a in &mut actors {
-            if a.cde.state() == 2 {
-                continue;
-            }
-            let [vx_f64, vy_f64] = a.cde.bohm_momentum(a.speed);
-            if vy_f64.abs() > vx_f64.abs() {
-                // e2-oriented process: step vertically between learned excursion bounds
-                // and reflect rotor U -> N U ~N at upper/lower limits.
-                let vy = vy_f64 as f32;
-                if a.y >= a.bounds_y[1] - 1.0 && (player.x - a.x).abs() <= a.w * 1.25 {
+            // Step autonomous terrestrial holons
+            let (px, py, pw, ph, pvy) = self
+                .holons
+                .first()
+                .map(|p| (p.pos[0], p.pos[1], p.size[0], p.size[1], p.vel[1]))
+                .unwrap_or((0.0, 0.0, 12.0, 24.0, 0.0));
+            let view_right = px + self.vw as f32;
+            let mut new_impacts = 0usize;
+            let mut bounce_player = false;
+
+            for a in self.holons.iter_mut().skip(1) {
+                if a.cde.state() == 2 {
                     continue;
                 }
-                a.y = (a.y + vy).clamp(a.bounds_y[0], a.bounds_y[1]);
-                if a.y <= a.bounds_y[0] {
-                    a.cde.reflect_at_boundary([0.0, 1.0], &basis);
-                } else if a.y >= a.bounds_y[1] {
-                    a.cde.reflect_at_boundary([0.0, -1.0], &basis);
+                let [vx_f64, vy_f64] = a.cde.bohm_momentum(a.speed);
+                if vy_f64.abs() > vx_f64.abs() {
+                    let vy = vy_f64 as f32;
+                    if a.pos[1] >= a.bounds_y[1] - 1.0 && (px - a.pos[0]).abs() <= a.size[0] * 1.25
+                    {
+                        continue;
+                    }
+                    a.pos[1] = (a.pos[1] + vy).clamp(a.bounds_y[0], a.bounds_y[1]);
+                    a.phase += vy.abs() * 0.25;
+                    if a.pos[1] <= a.bounds_y[0] {
+                        a.cde.reflect_at_boundary([0.0, 1.0], &self.basis);
+                    } else if a.pos[1] >= a.bounds_y[1] {
+                        a.cde.reflect_at_boundary([0.0, -1.0], &self.basis);
+                    }
+                    continue;
                 }
-                continue;
-            }
-            if a.x > view_right {
-                continue;
-            }
-            let vx = vx_f64 as f32;
-            a.x += vx;
-            let check_x = if vx > 0.0 { a.x + a.w + 1.0 } else { a.x - 1.0 };
-            let check_y = a.y + a.h * 0.5;
-            if model.solid_at_world(check_x, check_y).is_some()
-                || model.one_way_at_world(check_x, check_y).is_some()
-            {
-                // Lateral boundary incidence: rotor reflection U -> N U ~N and idempotent transition T_{0<->1}
-                let normal = if vx > 0.0 { [-1.0, 0.0] } else { [1.0, 0.0] };
-                a.cde.reflect_at_boundary(normal, &basis);
-            }
+                if a.pos[0] > view_right {
+                    continue;
+                }
+                let vx = vx_f64 as f32;
+                a.pos[0] += vx;
+                a.phase += vx.abs() * 0.35;
 
-            // Environmental surface support constraint for terrestrial processes
-            if m.gravity > 0.0 {
-                let center_x = a.x + a.w * 0.5;
-                let feet = a.y + a.h;
+                // Surface support coupling resolved before lateral wall probe so
+                // actors on raised terrain steps never probe into the step below them.
+                let center_x = a.pos[0] + a.size[0] * 0.5;
+                let feet = a.pos[1] + a.size[1];
                 let mut surface_top: Option<f32> = None;
-                for s in &model.manifest.solids {
-                    if (center_x as i32) >= s[0] && (center_x as i32) <= s[2] {
-                        let top = s[1] as f32;
-                        if feet >= top - 8.0 && feet <= top + 16.0 {
+                for b in &self.boundaries {
+                    if b.blade.permeability == [0.0, 0.0, 0.0, 0.0]
+                        && (center_x as i32) >= b.blade.rect[0]
+                        && (center_x as i32) <= b.blade.rect[2]
+                    {
+                        let top = b.blade.rect[1] as f32;
+                        if feet >= top - 8.0 && feet <= top + 24.0 {
                             surface_top = Some(surface_top.map_or(top, |t| t.min(top)));
                         }
                     }
                 }
                 if surface_top.is_none() {
-                    for p in &model.manifest.platforms {
-                        if (center_x as i32) >= p[0] && (center_x as i32) <= p[2] {
-                            let top = p[1] as f32;
+                    for b in &self.boundaries {
+                        if b.blade.permeability[2] == 0.0
+                            && (center_x as i32) >= b.blade.rect[0]
+                            && (center_x as i32) <= b.blade.rect[2]
+                        {
+                            let top = b.blade.rect[1] as f32;
                             if feet >= top - 8.0 && feet <= top + 16.0 {
                                 surface_top = Some(surface_top.map_or(top, |t| t.min(top)));
                             }
@@ -1525,42 +892,270 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                     }
                 }
                 if let Some(top) = surface_top {
-                    a.y = top - a.h;
+                    a.pos[1] = top - a.size[1];
+                }
+
+                let check_x = if vx > 0.0 {
+                    a.pos[0] + a.size[0] + 1.0
+                } else {
+                    a.pos[0] - 1.0
+                };
+                let hit_wall = [a.pos[1] + 2.0, a.pos[1] + a.size[1] * 0.5].iter().any(|&cy| {
+                    model.solid_at_world(check_x, cy).is_some()
+                        || model.one_way_at_world(check_x, cy).is_some()
+                });
+                if hit_wall {
+                    let normal = if vx > 0.0 { [-1.0, 0.0] } else { [1.0, 0.0] };
+                    a.cde.reflect_at_boundary(normal, &self.basis);
+                }
+
+                // Top-down relational incidence (P_player ∧ L_actor_top = 0 with v_y > 0)
+                let p_feet = py + ph;
+                if pvy > 0.0
+                    && p_feet >= a.pos[1]
+                    && prev_primary_feet <= a.pos[1] + 6.0
+                    && (px + pw) > a.pos[0]
+                    && px < (a.pos[0] + a.size[0])
+                {
+                    let _ = a.cde.transition_to(2, &self.basis);
+                    a.cde.amplitude = 0.0;
+                    bounce_player = true;
+                    new_impacts += 1;
+                }
+            }
+            if bounce_player {
+                if let Some(p) = self.holons.first_mut() {
+                    p.vel[1] = -launch_impulse * 0.75;
+                }
+            }
+            self.impacts += new_impacts;
+
+            // Camera follows primary holon horizontally
+            if let Some(p) = self.holons.first() {
+                let max_cam = self.aw.saturating_sub(self.vw);
+                self.cam[0] = ((p.pos[0] + p.size[0] * 0.5 - self.vw as f32 * 0.5).round()
+                    as usize)
+                    .min(max_cam);
+                self.cam[1] = 0;
+            }
+        } else if vertical_corridor {
+            // Vertical scrolling corridor regime (ay == 0, camera ego-motor along e02)
+            let s_idx = frame.min(m.scroll.len().saturating_sub(1));
+            let off = m.scroll.get(s_idx).copied().unwrap_or([0, 0]);
+            self.cam[0] =
+                (off[0] - m.origin[0]).clamp(0, self.aw.saturating_sub(self.vw) as i32) as usize;
+            self.cam[1] =
+                (off[1] - m.origin[1]).clamp(0, self.ah.saturating_sub(self.vh) as i32) as usize;
+
+            if let Some(p) = self.holons.first_mut() {
+                let t_sec = frame as f32 / 30.0;
+                let pw = p.size[0];
+                let ph = p.size[1];
+                let target_px = ((self.vw as f32) * 0.5 - pw * 0.5)
+                    + ((self.vw as f32) * 0.35) * (t_sec * 0.8).sin()
+                    + 18.0 * (t_sec * 2.1).sin();
+                let target_py = (self.vh as f32) - ph - 26.0 + 12.0 * (t_sec * 1.3).cos();
+                p.pos[0] = (p.pos[0] + (target_px - p.pos[0]) * 0.12)
+                    .clamp(14.0, (self.vw as f32) - pw - 14.0);
+                p.pos[1] = (p.pos[1] + (target_py - p.pos[1]) * 0.12)
+                    .clamp((self.vh as f32) * 0.35, (self.vh as f32) - ph - 8.0);
+                p.phase += 0.35;
+
+                // Attached trailing wake along -s
+                self.wakes.push(AttachedWake {
+                    pos: [
+                        p.pos[0] + pw * 0.5 + ((frame as f32 * 1.7).sin() * pw * 0.22),
+                        p.pos[1] + ph + 1.0,
+                    ],
+                    vel: [0.0, 1.8],
+                    color: [140, 220, 255],
+                    timer: 8,
+                    max_timer: 8,
+                    radius: 3.2,
+                });
+
+                // Forward soliton bifurcation along +s
+                if frame % 7 == 0 {
+                    for frac in [0.25f32, 0.75] {
+                        self.projectiles.push(SolitonProjectile {
+                            pos: [p.pos[0] + pw * frac, p.pos[1] - 2.0],
+                            vel: [0.0, -8.0],
+                            color: [180, 240, 255],
+                        });
+                    }
                 }
             }
 
-            // Top-down relational incidence: downward player motion onto the actor's top boundary
-            let feet = player.y + player.h;
-            if player.vy > 0.0
-                && feet >= a.y
-                && prev_feet <= a.y + 6.0
-                && (player.x + player.w) > a.x
-                && player.x < (a.x + a.w)
-            {
-                // Downward impact: collapse actor CDE to post-impact state (State 2, amplitude -> 0)
-                let _ = a.cde.transition_to(2, &basis);
-                a.cde.amplitude = 0.0;
-                player.vy = -JUMP * 0.75;
-                impacts += 1;
-                eprintln!(
-                    "Impact at frame {frame}: player landed on actor at x={:.1} y={:.1}",
-                    a.x, a.y
-                );
+            // Step autonomous holons under Bohm momentum + Q_Cl torque
+            for (hi, h) in self.holons.iter_mut().enumerate().skip(1) {
+                if h.respawn_timer > 0 {
+                    h.respawn_timer -= 1;
+                    if h.respawn_timer == 0 {
+                        let _ = h.cde.transition_to(0, &self.basis);
+                        h.cde.amplitude = 1.0;
+                        h.pos[1] = -40.0 - ((hi * 41) % 120) as f32;
+                        h.pos[0] = 24.0
+                            + ((hi * 79 + frame * 13) % (self.vw.saturating_sub(60))).max(10)
+                                as f32;
+                    }
+                    continue;
+                }
+                if frame < h.spawn_delay {
+                    continue;
+                }
+                let [vx, vy] = h.cde.bohm_momentum(h.speed);
+                h.pos[0] += vx as f32;
+                h.pos[1] += (vy as f32).max(1.25);
+                h.phase += 0.30;
+
+                let ux = (h.pos[0] / self.vw.max(1) as f32).clamp(0.0, 1.0) as f64;
+                let uy = (h.pos[1] / self.vh.max(1) as f32).clamp(0.0, 1.0) as f64;
+                let [gx, gy] = self.qfield.gradient_at(ux, uy);
+                h.cde.apply_quantum_torque([-gx * 0.001, -gy * 0.001], 0.15);
+
+                if h.pos[0] <= 16.0 {
+                    h.pos[0] = 16.0;
+                    h.cde.reflect_at_boundary([1.0, 0.0], &self.basis);
+                } else if h.pos[0] + h.size[0] >= (self.vw as f32) - 16.0 {
+                    h.pos[0] = (self.vw as f32) - 16.0 - h.size[0];
+                    h.cde.reflect_at_boundary([-1.0, 0.0], &self.basis);
+                }
+
+                if h.pos[1] > self.vh as f32 + 20.0 {
+                    h.pos[1] = -35.0;
+                    h.pos[0] = 24.0
+                        + ((hi * 71 + frame * 17) % (self.vw.saturating_sub(60))).max(10) as f32;
+                }
+
+                let mut hit = false;
+                self.projectiles.retain(|p| {
+                    if hit {
+                        return true;
+                    }
+                    if p.pos[0] >= h.pos[0] - 2.0
+                        && p.pos[0] <= h.pos[0] + h.size[0] + 2.0
+                        && p.pos[1] >= h.pos[1]
+                        && p.pos[1] <= h.pos[1] + h.size[1]
+                    {
+                        hit = true;
+                        false
+                    } else {
+                        true
+                    }
+                });
+
+                if hit {
+                    let _ = h.cde.transition_to(2, &self.basis);
+                    h.cde.amplitude = 0.0;
+                    h.respawn_timer = 18;
+                    self.impacts += 1;
+                    let cx = h.pos[0] + h.size[0] * 0.5;
+                    let cy = h.pos[1] + h.size[1] * 0.5;
+                    self.dispersions.push(RadialDispersion {
+                        pos: [cx, cy],
+                        timer: 16,
+                        max_timer: 16,
+                        radius: 18.0,
+                        color: [255, 180, 40],
+                    });
+                    self.excitations.push(FieldExcitation {
+                        rect: [cx as i32 - 4, cy as i32 - 4, cx as i32 + 4, cy as i32 + 4],
+                        pos: [cx, cy],
+                        vel: [0.0, 0.8],
+                        color: [252, 210, 40],
+                        timer: 180,
+                        anchored: false,
+                        active: true,
+                    });
+                }
+            }
+        } else if planar_static {
+            // Planar zero-drift arena: trajectory + Q_Cl quantum torque continuation
+            self.cam = [0, 0];
+            for h in &mut self.holons {
+                if let Some(&(tx, ty)) = h.trajectory.get(&frame) {
+                    let dx = tx as f32 - h.pos[0];
+                    let dy = ty as f32 - h.pos[1];
+                    let ds = (dx * dx + dy * dy).sqrt();
+                    h.phase += ds * 0.40;
+                    if ds > 0.5 && dx.abs() < (self.aw as f32 * 0.5) {
+                        h.cde.set_heading_angle((dy as f64).atan2(dx as f64));
+                    }
+                    h.pos = [tx as f32, ty as f32];
+                } else {
+                    let ux = (h.pos[0] as f64 / self.aw.max(1) as f64).clamp(0.0, 1.0);
+                    let uy = (h.pos[1] as f64 / self.ah.max(1) as f64).clamp(0.0, 1.0);
+                    let [gx, gy] = self.qfield.gradient_at(ux, uy);
+                    h.cde.apply_quantum_torque([-gx * 0.001, -gy * 0.001], 0.2);
+                    let [vx, vy] = h.cde.bohm_momentum(h.speed);
+                    let ds = (vx * vx + vy * vy).sqrt() as f32;
+                    h.phase += ds * 0.40;
+                    let nx = (h.pos[0] as f64 + vx).rem_euclid(self.aw.max(1) as f64) as f32;
+                    let ny = (h.pos[1] as f64 + vy).clamp(0.0, (self.ah.saturating_sub(1)) as f64)
+                        as f32;
+                    let cx = nx + h.size[0] * 0.5;
+                    let cy = ny + h.size[1] * 0.5;
+                    if model.solid_at_world(cx, cy).is_none() {
+                        h.pos = [nx, ny];
+                    } else {
+                        let normal = if vx.abs() >= vy.abs() {
+                            [-vx.signum(), 0.0]
+                        } else {
+                            [0.0, -vy.signum()]
+                        };
+                        h.cde.reflect_at_boundary(normal, &self.basis);
+                    }
+                }
             }
         }
-        if std::env::var_os("CC_TRACE").is_some() && frame % 25 == 0 {
-            eprintln!(
-                "trace f{frame}: x={:.2} y={:.2} vy={:.2} ground={}",
-                player.x, player.y, player.vy, player.on_ground
-            );
+
+        // 4. Universal relational excitation absorption (primary holon ∩ FieldExcitation)
+        if let Some(primary) = self.holons.first() {
+            let pcx = primary.pos[0] + primary.size[0] * 0.5;
+            let pcy = primary.pos[1] + primary.size[1] * 0.5;
+            let bg = m.background;
+            let radius_sq = if vertical_corridor { 500.0f32 } else { 64.0f32 };
+            for tok in &mut self.excitations {
+                if !tok.active || (!tok.anchored && ay > 0.0) {
+                    continue;
+                }
+                let dx = pcx - tok.pos[0];
+                let dy = pcy - tok.pos[1];
+                if dx * dx + dy * dy <= radius_sq {
+                    tok.active = false;
+                    self.excitations_absorbed += 1;
+                    if tok.anchored {
+                        let r = tok.rect;
+                        for y in (r[1] - 1).max(0)..=(r[3] + 1).min(self.ah as i32 - 1) {
+                            for x in (r[0] - 1).max(0)..=(r[2] + 1).min(self.aw as i32 - 1) {
+                                let idx = (y as usize * self.aw + x as usize) * 3;
+                                self.atlas_rgb[idx] = bg[0];
+                                self.atlas_rgb[idx + 1] = bg[1];
+                                self.atlas_rgb[idx + 2] = bg[2];
+                            }
+                        }
+                    }
+                }
+            }
+            self.excitations.retain(|tok| tok.active);
         }
+    }
 
-        // Camera follows the player, clamped to the atlas.
-        let max_cam = aw.saturating_sub(vw);
-        let cam_x = ((player.x + player.w / 2.0 - vw as f32 / 2.0).round() as usize).min(max_cam);
-        let cam_y = 0usize.min(ah.saturating_sub(vh));
-
+    /// Render the current world state into `buf` (`vw * vh * 3` RGB24) using
+    /// camera-transformed atlas blitting, boundary holon states, and 2D+t CFT
+    /// spectral sprite evaluation.
+    fn render(&self, model: &Model2D, frame: usize, buf: &mut [u8]) {
+        let m = &model.manifest;
+        let vw = self.vw;
+        let vh = self.vh;
+        let aw = self.aw;
+        let ah = self.ah;
+        let cam_x = self.cam[0];
+        let cam_y = self.cam[1];
         let hud_top = m.hud_top as usize;
+        let bg = m.background;
+
+        // 1. Background atlas + static HUD strip
         for y in 0..vh {
             let sy = cam_y + y;
             for x in 0..vw {
@@ -1581,35 +1176,35 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                     buf[i + 2] = hud.rgb[s + 2];
                 } else if sx < aw && sy < ah {
                     let s = (sy * aw + sx) * 3;
-                    buf[i] = model.atlas.rgb[s];
-                    buf[i + 1] = model.atlas.rgb[s + 1];
-                    buf[i + 2] = model.atlas.rgb[s + 2];
+                    buf[i] = self.atlas_rgb[s];
+                    buf[i + 1] = self.atlas_rgb[s + 1];
+                    buf[i + 2] = self.atlas_rgb[s + 2];
                 } else {
-                    buf[i] = 12;
-                    buf[i + 1] = 16;
-                    buf[i + 2] = 28;
+                    buf[i] = bg[0];
+                    buf[i + 1] = bg[1];
+                    buf[i + 2] = bg[2];
                 }
             }
         }
 
-        // Render interactive block props: active unhit state, bumping impulse, and spent state
-        for prop in &block_props {
-            let bx = prop.rect[0] - cam_x as i32;
-            let by = prop.rect[1] - cam_y as i32;
-            let bw = (prop.rect[2] - prop.rect[0] + 1).max(1);
-            let bh = (prop.rect[3] - prop.rect[1] + 1).max(1);
+        // 2. Stationary excitable boundary holons (drawn directly from atlas pixels + learned perimeter color)
+        let pulse = ((frame as f32 * 0.25).cos() * 14.0).round() as i32;
+        for b in &self.boundaries {
+            if !b.blade.excitable {
+                continue;
+            }
+            let r = b.blade.rect;
+            let bx = r[0] - cam_x as i32;
+            let by = r[1] - cam_y as i32;
+            let bw = (r[2] - r[0] + 1).max(1);
+            let bh = (r[3] - r[1] + 1).max(1);
             if bx + bw <= 0 || bx >= vw as i32 || by + bh <= 0 || by >= vh as i32 {
                 continue;
             }
-
-            if prop.bump_timer > 0 {
-                let bh_bump = bh + 1;
-                // Parabolic upward bump displacement
-                let bump_dy = (-(prop.bump_timer as f32 * (8.0 - prop.bump_timer as f32)) / 3.0)
+            if b.impulse_timer > 0 {
+                let bump_dy = (-(b.impulse_timer as f32 * (8.0 - b.impulse_timer as f32)) / 3.0)
                     .round() as i32;
-                let bg = m.background;
-                // Clear original location to learned backdrop
-                for ty in 0..bh_bump {
+                for ty in 0..=bh {
                     let dy = by + ty;
                     if dy >= 0 && dy < vh as i32 {
                         for tx in 0..bw {
@@ -1623,78 +1218,118 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
                         }
                     }
                 }
-                // Draw region from model.atlas displaced upward by bump_dy
-                for ty in 0..bh_bump {
+                for ty in 0..=bh {
                     let dy = by + bump_dy + ty;
-                    let ay = (prop.rect[1] + ty).max(0) as usize;
-                    if dy >= 0 && dy < vh as i32 && ay < ah {
+                    let ay_src = (r[1] + ty).max(0) as usize;
+                    if dy >= 0 && dy < vh as i32 && ay_src < ah {
                         for tx in 0..bw {
                             let dx = bx + tx;
-                            let ax = (prop.rect[0] + tx).max(0) as usize;
-                            if dx >= 0 && dx < vw as i32 && ax < aw {
+                            let ax_src = (r[0] + tx).max(0) as usize;
+                            if dx >= 0 && dx < vw as i32 && ax_src < aw {
                                 let idx = (dy as usize * vw + dx as usize) * 3;
-                                let s = (ay * aw + ax) * 3;
-                                buf[idx] = model.atlas.rgb[s];
-                                buf[idx + 1] = model.atlas.rgb[s + 1];
-                                buf[idx + 2] = model.atlas.rgb[s + 2];
+                                let s = (ay_src * aw + ax_src) * 3;
+                                buf[idx] = self.atlas_rgb[s];
+                                buf[idx + 1] = self.atlas_rgb[s + 1];
+                                buf[idx + 2] = self.atlas_rgb[s + 2];
                             }
                         }
                     }
                 }
-            } else if prop.state == 0 {
-                // State 0: Active interactive prop before impact (gleaming insignia, corner bolts, active state)
-                let gleam = (frame / 8) % 4;
-                let base_color = [252u8, 160, 68];
-                let glint_color = [255u8, 230, 180];
-                let black = [0u8, 0, 0];
-                let white = [255u8, 255, 255];
-                for ty in 0..bh {
+            } else if b.cde.state() == 0 {
+                // Active state: modulate actual atlas texture luminance via CFT idle harmonic
+                for ty in 1..(bh - 1).max(1) {
                     let dy = by + ty;
                     if dy < 0 || dy >= vh as i32 {
                         continue;
                     }
-                    for tx in 0..bw {
+                    for tx in 1..(bw - 1).max(1) {
                         let dx = bx + tx;
                         if dx < 0 || dx >= vw as i32 {
                             continue;
                         }
                         let idx = (dy as usize * vw + dx as usize) * 3;
-                        let mut rgb = base_color;
-
-                        // Border
-                        if ty == 0 || ty == bh - 1 || tx == 0 || tx == bw - 1 {
-                            rgb = black;
-                        } else if (tx == 2 || tx == bw - 3) && (ty == 2 || ty == bh - 3) {
-                            // 4 corner bolts
-                            rgb = black;
-                        } else {
-                            // Question mark glyph pattern
-                            let is_white = matches!(
-                                (tx, ty),
-                                (5..=9, 3)
-                                    | (4..=5, 4)
-                                    | (9..=10, 4)
-                                    | (8..=9, 5)
-                                    | (7..=8, 6)
-                                    | (7..=8, 7)
-                                    | (7..=8, 10..=11)
-                            );
-                            let is_shadow = matches!(
-                                (tx, ty),
-                                (6..=8, 4)
-                                    | (10..=11, 5)
-                                    | (9..=10, 6)
-                                    | (8..=9, 7..=8)
-                                    | (8..=9, 11..=12)
-                            );
-                            if is_shadow {
-                                rgb = black;
-                            } else if is_white {
-                                rgb = if gleam == 2 { glint_color } else { white };
-                            } else if gleam == 1 && (ty == 1 || tx == 1) {
-                                rgb = glint_color;
-                            }
+                        for c in 0..3 {
+                            buf[idx + c] = (buf[idx + c] as i32 + pulse).clamp(0, 255) as u8;
                         }
+                    }
+                }
+            } else {
+                // Collapsed state (state == 2): attenuate interior toward learned perimeter frame color
+                let fc = b.blade.frame_color;
+                for ty in 1..(bh - 1).max(1) {
+                    let dy = by + ty;
+                    if dy < 0 || dy >= vh as i32 {
+                        continue;
+                    }
+                    for tx in 1..(bw - 1).max(1) {
+                        let dx = bx + tx;
+                        if dx < 0 || dx >= vw as i32 {
+                            continue;
+                        }
+                        let idx = (dy as usize * vw + dx as usize) * 3;
+                        buf[idx] = fc[0];
+                        buf[idx + 1] = fc[1];
+                        buf[idx + 2] = fc[2];
+                    }
+                }
+            }
+        }
+
+        // 3. Attached process wakes
+        for w in &self.wakes {
+            let wx = w.pos[0].round() as i32;
+            let wy = w.pos[1].round() as i32;
+            let rad = (w.radius * (w.timer as f32 / w.max_timer as f32)).max(1.0) as i32;
+            let alpha_scale = w.timer as f32 / w.max_timer as f32;
+            for dy in -rad..=rad {
+                let py_pix = wy + dy;
+                if py_pix < 0 || py_pix >= vh as i32 {
+                    continue;
+                }
+                for dx in -rad..=rad {
+                    let px_pix = wx + dx;
+                    if px_pix < 0 || px_pix >= vw as i32 {
+                        continue;
+                    }
+                    if dx * dx + dy * dy <= rad * rad {
+                        let idx = (py_pix as usize * vw + px_pix as usize) * 3;
+                        for c in 0..3 {
+                            buf[idx + c] = (buf[idx + c] as f32 * (1.0 - alpha_scale * 0.6)
+                                + w.color[c] as f32 * alpha_scale * 0.6)
+                                as u8;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Emitted non-anchored field excitations
+        for tok in &self.excitations {
+            if tok.anchored || !tok.active {
+                continue;
+            }
+            let screen_coords = self.env_drift[1] <= 0.0 && self.scroll_span[1] > 8;
+            let tx = tok.pos[0].round() as i32 - if screen_coords { 0 } else { cam_x as i32 };
+            let ty = tok.pos[1].round() as i32 - if screen_coords { 0 } else { cam_y as i32 };
+            let rad = 5i32;
+            for dy in -rad..=rad {
+                let py_pix = ty + dy;
+                if py_pix < 0 || py_pix >= vh as i32 {
+                    continue;
+                }
+                for dx in -rad..=rad {
+                    let px_pix = tx + dx;
+                    if px_pix < 0 || px_pix >= vw as i32 {
+                        continue;
+                    }
+                    let dist = dx.abs() + dy.abs();
+                    if dist <= rad + 1 {
+                        let idx = (py_pix as usize * vw + px_pix as usize) * 3;
+                        let rgb = if dist <= 1 {
+                            [255u8, 255, 230]
+                        } else {
+                            tok.color
+                        };
                         buf[idx] = rgb[0];
                         buf[idx + 1] = rgb[1];
                         buf[idx + 2] = rgb[2];
@@ -1703,35 +1338,104 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
             }
         }
 
-        // Render emitted coin tokens.
-        for c in &coins {
-            let cx = c.x as i32 - cam_x as i32;
-            let cy = c.y as i32 - cam_y as i32;
-            let cw = 8i32;
-            let ch = 14i32;
-            for py in 0..ch {
-                let dy = cy + py;
-                if dy < 0 || dy >= vh as i32 {
+        // 5. Mobile holons (autonomous first, then primary holon) evaluated via 2D+t CFT kernels
+        let screen_space_actors =
+            self.env_drift[1] <= 0.0 && self.scroll_span[1] > self.scroll_span[0] && self.scroll_span[1] > 8;
+        let order = (1..self.holons.len()).chain(std::iter::once(0));
+        for hi in order {
+            let Some(h) = self.holons.get(hi) else {
+                continue;
+            };
+            if h.respawn_timer > 0 || frame < h.spawn_delay {
+                continue;
+            }
+            let ax = h.pos[0].round() as i32 - if screen_space_actors { 0 } else { cam_x as i32 };
+            let ay = h.pos[1].round() as i32 - if screen_space_actors { 0 } else { cam_y as i32 };
+            if ax + h.size[0] as i32 <= 0
+                || ax >= vw as i32
+                || ay + h.size[1] as i32 <= 0
+                || ay >= vh as i32
+            {
+                continue;
+            }
+            let [hx, hy] = h.cde.heading_vector();
+            let flip_x = if !h.is_primary && self.env_drift[1] > 0.0 && hx.abs() >= hy.abs() {
+                let is_bilateral = (h.size[0] - h.size[1]).abs() <= 4.0;
+                if is_bilateral {
+                    h.cde.state() != 2 && (h.phase * 0.9).sin() < 0.0
+                } else {
+                    hx > 0.25
+                }
+            } else {
+                !screen_space_actors && hx < -0.25 && hx.abs() >= hy.abs()
+            };
+            let eval_phase = if h.cde.state() == 2 { 0.0 } else { h.phase };
+            if let Some(si) = h.sprite_idx {
+                if let Some((sw_u, sh_u, rgba)) =
+                    model.evaluate_sprite_cft(si, h.harmonic_idx, eval_phase, flip_x)
+                {
+                    let sw = sw_u as i32;
+                    let sh = sh_u as i32;
+                    let state = h.cde.state();
+                    let render_h = if state == 2 && self.env_drift[1] > 0.0 {
+                        (sh / 2).max(1)
+                    } else {
+                        sh
+                    };
+                    let sy_off = if self.env_drift[1] > 0.0 {
+                        (ay + h.size[1] as i32) - render_h
+                    } else {
+                        ay
+                    };
+                    let sx_off = if h.is_primary && self.env_drift[1] > 0.0 {
+                        ax + (h.size[0] as i32 - sw) / 2
+                    } else {
+                        ax
+                    };
+                    for sy in 0..render_h {
+                        let dy = sy_off + sy;
+                        if dy < 0 || dy >= vh as i32 {
+                            continue;
+                        }
+                        let src_y = if state == 2 && self.env_drift[1] > 0.0 {
+                            (sy * 2).min(sh - 1)
+                        } else {
+                            sy
+                        };
+                        for sx in 0..sw {
+                            let dx = sx_off + sx;
+                            if dx < 0 || dx >= vw as i32 {
+                                continue;
+                            }
+                            let p_idx = ((src_y * sw + sx) * 4) as usize;
+                            let alpha = rgba[p_idx + 3] as u32;
+                            if alpha >= 96 {
+                                let i = (dy as usize * vw + dx as usize) * 3;
+                                let inv = 255 - alpha;
+                                buf[i] =
+                                    ((rgba[p_idx] as u32 * alpha + buf[i] as u32 * inv) / 255) as u8;
+                                buf[i + 1] = ((rgba[p_idx + 1] as u32 * alpha
+                                    + buf[i + 1] as u32 * inv)
+                                    / 255) as u8;
+                                buf[i + 2] = ((rgba[p_idx + 2] as u32 * alpha
+                                    + buf[i + 2] as u32 * inv)
+                                    / 255) as u8;
+                            }
+                        }
+                    }
                     continue;
                 }
-                let ry = (py as f32 - ch as f32 / 2.0) / (ch as f32 / 2.0);
-                for px in 0..cw {
-                    let dx = cx + px;
-                    if dx < 0 || dx >= vw as i32 {
-                        continue;
-                    }
-                    let rx = (px as f32 - cw as f32 / 2.0) / (cw as f32 / 2.0);
-                    if rx * rx + ry * ry <= 1.0 {
-                        let i = (dy as usize * vw + dx as usize) * 3;
-                        let is_rim = rx * rx + ry * ry > 0.65;
-                        let is_shine = rx.abs() < 0.25 && ry < 0.2;
-                        let rgb = if is_shine {
-                            [255u8, 255, 210] // gleaming coin shine
-                        } else if is_rim {
-                            [184u8, 115, 0] // dark gold rim
-                        } else {
-                            [252u8, 198, 3] // rich gold body
-                        };
+            }
+            if h.cde.state() != 2 {
+                let c = h.cde.signature;
+                let rgb = [
+                    (c[0].s * 255.0).clamp(40.0, 255.0) as u8,
+                    (c[1].s * 255.0).clamp(40.0, 255.0) as u8,
+                    (c[2].s * 255.0).clamp(40.0, 255.0) as u8,
+                ];
+                for y in ay.max(0)..(ay + h.size[1] as i32).min(vh as i32) {
+                    for x in ax.max(0)..(ax + h.size[0] as i32).min(vw as i32) {
+                        let i = (y as usize * vw + x as usize) * 3;
                         buf[i] = rgb[0];
                         buf[i + 1] = rgb[1];
                         buf[i + 2] = rgb[2];
@@ -1740,141 +1444,145 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
             }
         }
 
-        // Render player sprite (or fallback to collision box).
-        let px = player.x as i32 - cam_x as i32;
-        let py = player.y as i32 - cam_y as i32;
-        if let Some(sprite) = &player_sprite {
-            let sw = sprite.width() as i32;
-            let sh = sprite.height() as i32;
-            let sy_off = (py + player.h as i32) - sh;
-            let sx_off = px + (player.w as i32 - sw) / 2;
-            let is_jumping = !player.on_ground;
-            let walk_cycle = ((player.phase * 0.8).sin() * 1.5).round() as i32;
-            for sy in 0..sh {
-                let dy = sy_off + sy;
-                if dy < 0 || dy >= vh as i32 {
+        // 6. Radial dispersions
+        for d in &self.dispersions {
+            let bx = d.pos[0].round() as i32;
+            let by = d.pos[1].round() as i32;
+            let progress = 1.0 - (d.timer as f32 / d.max_timer as f32);
+            let radius = (6.0 + progress * d.radius) as i32;
+            for dy in -radius..=radius {
+                let py_pix = by + dy;
+                if py_pix < 0 || py_pix >= vh as i32 {
                     continue;
                 }
-                for sx in 0..sw {
-                    let dx = sx_off + sx;
-                    if dx < 0 || dx >= vw as i32 {
+                for dx in -radius..=radius {
+                    let px_pix = bx + dx;
+                    if px_pix < 0 || px_pix >= vw as i32 {
                         continue;
                     }
-                    // Harmonic vitality stride / jump pose
-                    let mut src_x = sx;
-                    let mut src_y = sy;
-                    if is_jumping {
-                        if sy < sh / 2 && sy > 1 {
-                            src_y = (sy + 1).min(sh - 1);
+                    let d2 = dx * dx + dy * dy;
+                    let r2 = radius * radius;
+                    if d2 <= r2 {
+                        let idx = (py_pix as usize * vw + px_pix as usize) * 3;
+                        let frac = (d2 as f32 / r2 as f32).sqrt();
+                        let rgb = if frac < 0.35 {
+                            [255u8, 255, 240]
+                        } else if frac < 0.7 {
+                            d.color
+                        } else {
+                            [220u8, 60, 20]
+                        };
+                        for c in 0..3 {
+                            buf[idx + c] = ((buf[idx + c] as u32 + rgb[c] as u32) / 2) as u8;
                         }
-                    } else if player.on_ground && player.vx.abs() > 0.1 {
-                        let is_leg = sy >= (sh * 3) / 4;
-                        if is_leg {
-                            src_x = (sx + walk_cycle).clamp(0, sw - 1);
-                        }
-                    }
-                    let p = sprite.get_pixel(src_x as u32, src_y as u32);
-                    let a = p[3] as u32;
-                    if a >= 100 {
-                        let i = (dy as usize * vw + dx as usize) * 3;
-                        let inv = 255 - a;
-                        buf[i] = ((p[0] as u32 * a + buf[i] as u32 * inv) / 255) as u8;
-                        buf[i + 1] = ((p[1] as u32 * a + buf[i + 1] as u32 * inv) / 255) as u8;
-                        buf[i + 2] = ((p[2] as u32 * a + buf[i + 2] as u32 * inv) / 255) as u8;
-                    }
-                }
-            }
-        } else {
-            for y in py.max(0)..(py + player.h as i32).min(vh as i32) {
-                for x in px.max(0)..(px + player.w as i32).min(vw as i32) {
-                    let i = (y as usize * vw + x as usize) * 3;
-                    buf[i] = 235;
-                    buf[i + 1] = 60;
-                    buf[i + 2] = 60;
-                }
-            }
-        }
-
-        // Render autonomous actor holons.
-        for a in &actors {
-            let ax = a.x as i32 - cam_x as i32;
-            let ay = a.y as i32 - cam_y as i32;
-            if ax + a.w as i32 <= 0
-                || ax >= vw as i32
-                || ay + a.h as i32 <= 0
-                || ay >= vh as i32
-            {
-                continue;
-            }
-            if let Some(sprite) = &a.sprite {
-                let sw = sprite.width() as i32;
-                let sh = sprite.height() as i32;
-                let state = a.cde.state();
-                let render_h = if state == 2 { (sh / 2).max(1) } else { sh };
-                let sy_off = (ay + a.h as i32) - render_h;
-                let sx_off = ax;
-                let [hx, hy] = a.cde.heading_vector();
-                let walk_flip = hx.abs() >= hy.abs() && state != 2 && (frame / 8) % 2 == 1;
-                for sy in 0..render_h {
-                    let dy = sy_off + sy;
-                    if dy < 0 || dy >= vh as i32 {
-                        continue;
-                    }
-                    let src_y = if state == 2 { sy * 2 } else { sy };
-                    for sx in 0..sw {
-                        let dx = sx_off + sx;
-                        if dx < 0 || dx >= vw as i32 {
-                            continue;
-                        }
-                        let src_x = if walk_flip { sw - 1 - sx } else { sx };
-                        let p = sprite.get_pixel(src_x as u32, src_y as u32);
-                        let alpha = p[3] as u32;
-                        if alpha >= 100 {
-                            let i = (dy as usize * vw + dx as usize) * 3;
-                            let inv = 255 - alpha;
-                            buf[i] = ((p[0] as u32 * alpha + buf[i] as u32 * inv) / 255) as u8;
-                            buf[i + 1] =
-                                ((p[1] as u32 * alpha + buf[i + 1] as u32 * inv) / 255) as u8;
-                            buf[i + 2] =
-                                ((p[2] as u32 * alpha + buf[i + 2] as u32 * inv) / 255) as u8;
-                        }
-                    }
-                }
-            } else if a.cde.state() != 2 {
-                for y in ay.max(0)..(ay + a.h as i32).min(vh as i32) {
-                    for x in ax.max(0)..(ax + a.w as i32).min(vw as i32) {
-                        let i = (y as usize * vw + x as usize) * 3;
-                        buf[i] = 160;
-                        buf[i + 1] = 80;
-                        buf[i + 2] = 40;
                     }
                 }
             }
         }
 
+        // 7. Directional solitons
+        for p in &self.projectiles {
+            let bx = p.pos[0].round() as i32;
+            let by = p.pos[1].round() as i32;
+            for dy in -4i32..=4 {
+                let py_pix = by + dy;
+                if py_pix < 0 || py_pix >= vh as i32 {
+                    continue;
+                }
+                for dx in -1i32..=1 {
+                    let px_pix = bx + dx;
+                    if px_pix < 0 || px_pix >= vw as i32 {
+                        continue;
+                    }
+                    let idx = (py_pix as usize * vw + px_pix as usize) * 3;
+                    let rgb = if dx == 0 && dy.abs() <= 2 {
+                        [255u8, 255, 255]
+                    } else {
+                        p.color
+                    };
+                    buf[idx] = rgb[0];
+                    buf[idx + 1] = rgb[1];
+                    buf[idx + 2] = rgb[2];
+                }
+            }
+        }
+    }
+}
+
+fn cmd_unfold(args: &[String]) -> io::Result<()> {
+    let pos = positional(args);
+    let Some(path) = pos.first() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unfold needs a .cc model",
+        ));
+    };
+    let model = Model2D::load(Path::new(path))?;
+    let m = &model.manifest;
+    let frames: usize = opt(args, "--frames")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or_else(|| {
+            if m.env_drift[1] <= 0.0 && m.gravity <= 0.0 {
+                m.scroll.len().max(600)
+            } else {
+                600
+            }
+        });
+    let capture = opt(args, "--capture").map(PathBuf::from);
+    let no_video = args.iter().any(|a| a == "--no-video");
+    let out = opt(args, "-o").map(PathBuf::from);
+    if let Some(dir) = &capture {
+        std::fs::create_dir_all(dir)?;
+    }
+
+    let mut world = WorldState2D::new(&model);
+    let mut buf = vec![0u8; world.vw * world.vh * 3];
+    let mut writer = match (&out, no_video) {
+        (Some(p), false) => Some(video_io::VideoWriter::create(
+            p,
+            world.vw as u32,
+            world.vh as u32,
+            30.0,
+        )?),
+        _ => None,
+    };
+
+    let t0 = Instant::now();
+    let mut captured = 0usize;
+    for frame in 0..frames {
+        world.step(&model, frame);
+        if writer.is_some() || capture.is_some() {
+            world.render(&model, frame, &mut buf);
+        }
         if let Some(w) = writer.as_mut() {
             w.write_frame(&buf)?;
         }
         if let Some(dir) = &capture {
             if frame % 10 == 0 || frame + 1 == frames {
                 let p = dir.join(format!("frame_{frame:05}.png"));
-                video_io::write_png(&p, vw as u32, vh as u32, &buf)?;
+                video_io::write_png(&p, world.vw as u32, world.vh as u32, &buf)?;
                 captured += 1;
             }
         }
     }
+
     let secs = t0.elapsed().as_secs_f64();
     if let Some(w) = writer.as_mut() {
         w.finish()?;
     }
+    let [px, py] = world
+        .holons
+        .first()
+        .map(|h| h.pos)
+        .unwrap_or([0.0, 0.0]);
     println!(
-        "unfolded {frames} frames in {:.3}s ({:.0} Hz, headless)",
+        "unfolded {frames} frames in {:.3}s ({:.0} Hz, unified implicate WorldState2D)",
         secs,
         frames as f64 / secs.max(1e-9)
     );
     println!(
-        "player ended at x={:.1} y={:.1} (world), on_ground={}, impacts={}, coins={}",
-        player.x, player.y, player.on_ground, impacts, coins_collected
+        "primary holon ended at x={:.1} y={:.1}, impacts={}, excitations_absorbed={}",
+        px, py, world.impacts, world.excitations_absorbed
     );
     if let Some(dir) = &capture {
         println!("captured {captured} frames -> {}", dir.display());
@@ -1883,4 +1591,83 @@ fn cmd_unfold(args: &[String]) -> io::Result<()> {
         println!("video -> {}", p.display());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cc_field::enfold2d::RgbImage8;
+    use cc_field::model2d::{BoundaryBlade, ModelManifest, TrackRecord, VERSION};
+
+    #[test]
+    fn unified_world_steps_terrestrial_and_planar_regimes() {
+        let atlas = RgbImage8::new(128, 128);
+        let terrestrial = Model2D {
+            manifest: ModelManifest {
+                version: VERSION,
+                source: "synth".into(),
+                start: 0.0,
+                duration: 2.0,
+                fps: 30.0,
+                hud_top: 120,
+                viewport: [64, 64],
+                atlas: [128, 128],
+                origin: [0, 0],
+                tile: 16,
+                origin_y: 0,
+                ground_top: 100,
+                background: [0, 0, 0],
+                gravity: 0.35,
+                env_drift: [0.0, 0.35],
+                control_motor: [1.6, 6.0],
+                cols: 0,
+                rows: 0,
+                kinds: Vec::new(),
+                scroll: vec![[0, 0]; 30],
+                platforms: vec![[40, 72, 55, 87]],
+                solids: vec![[0, 100, 127, 127]],
+                collectibles: Vec::new(),
+                boundaries: vec![
+                    BoundaryBlade {
+                        rect: [0, 100, 127, 127],
+                        permeability: [0.0, 0.0, 0.0, 0.0],
+                        excitable: false,
+                        frame_color: [100, 80, 60],
+                    },
+                    BoundaryBlade {
+                        rect: [40, 72, 55, 87],
+                        permeability: [1.0, 1.0, 0.0, 0.0],
+                        excitable: true,
+                        frame_color: [140, 100, 50],
+                    },
+                ],
+                sprites: Vec::new(),
+                tracks: vec![TrackRecord {
+                    kind: "player".into(),
+                    frames: 10,
+                    size: [14, 24],
+                    spawn: [32, 76],
+                    span: [60, 32],
+                    velocity: [1.6, 0.0],
+                    color: [240, 80, 80],
+                    trajectory: Vec::new(),
+                    sprite: None,
+                    harmonic_sprite: None,
+                }],
+            },
+            atlas,
+            hud: None,
+            sprites: Vec::new(),
+        };
+        let mut world = WorldState2D::new(&terrestrial);
+        let mut buf = vec![0u8; 64 * 64 * 3];
+        for f in 0..40 {
+            world.step(&terrestrial, f);
+            world.render(&terrestrial, f, &mut buf);
+        }
+        assert!(
+            world.holons[0].pos[0] > 32.0,
+            "primary holon should advance under control motor"
+        );
+    }
 }

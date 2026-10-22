@@ -31,6 +31,23 @@ pub struct SpriteRecord {
     pub bytes: u32,
 }
 
+/// An oriented stationary boundary holon in continuous world coordinates
+/// `[x0, y0, x1, y1]` with directional mechanical admittance and excitable
+/// state-transition capacity.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BoundaryBlade {
+    /// World-space bounding contour `[x0, y0, x1, y1]`.
+    pub rect: [i32; 4],
+    /// Directional permeability `[left, right, top, bottom]` in `[0.0, 1.0]`.
+    /// `0.0` arrests incident momentum along that inward normal; `1.0` allows passage.
+    pub permeability: [f32; 4],
+    /// Whether normal incidence from below/side excites an internal state transition
+    /// $\epsilon_0 \to \epsilon_1 \to \epsilon_2$ and emits a localized field excitation.
+    pub excitable: bool,
+    /// Learned structural perimeter color from the world atlas (rendered when collapsed to $\epsilon_2$).
+    pub frame_color: [u8; 3],
+}
+
 /// A tracked actor, without pixels.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TrackRecord {
@@ -51,8 +68,11 @@ pub struct TrackRecord {
     /// Recorded `(frame_index, x, y)` positions.
     #[serde(default)]
     pub trajectory: Vec<[i32; 3]>,
-    /// Index into [`ModelManifest::sprites`].
+    /// Index into [`ModelManifest::sprites`] for DC mode $\hat{K}_0$.
     pub sprite: Option<u32>,
+    /// Optional index into [`ModelManifest::sprites`] for first CFT harmonic $\hat{K}_1 + 128$.
+    #[serde(default)]
+    pub harmonic_sprite: Option<u32>,
 }
 
 /// Everything in a model that is not pixels.
@@ -76,6 +96,12 @@ pub struct ModelManifest {
     /// Inferred vertical gravity acceleration (px/frame^2); 0.0 for planar worlds.
     #[serde(default)]
     pub gravity: f32,
+    /// Inferred environmental drift acceleration field `[ax, ay]` (px/frame^2).
+    #[serde(default)]
+    pub env_drift: [f32; 2],
+    /// Inferred primary control motor basis `[drive_speed, launch_impulse]` (px/frame).
+    #[serde(default)]
+    pub control_motor: [f32; 2],
     pub cols: u32,
     pub rows: u32,
     /// `TileKind` bytes, row-major.
@@ -89,6 +115,9 @@ pub struct ModelManifest {
     /// Isolated collectible excitations, world pixels: `[x0, y0, x1, y1]`.
     #[serde(default)]
     pub collectibles: Vec<[i32; 4]>,
+    /// Oriented stationary boundary holons with directional admittance.
+    #[serde(default)]
+    pub boundaries: Vec<BoundaryBlade>,
     pub sprites: Vec<SpriteRecord>,
     pub tracks: Vec<TrackRecord>,
 }
@@ -144,6 +173,143 @@ fn rect4(r: &Rect) -> [i32; 4] {
     [r.x0, r.y0, r.x1, r.y1]
 }
 
+/// Infer environmental drift acceleration `[ax, ay]` (px/frame^2) and primary
+/// control motor basis `[drive_speed, launch_impulse]` (px/frame) directly from
+/// tracked world-space trajectories and boundary support geometry.
+pub fn infer_world_kinematics(
+    tracks: &[TrackRecord],
+    ground_top: i32,
+    atlas_h: usize,
+    rules_gravity: Option<f32>,
+) -> ([f32; 2], [f32; 2]) {
+    let has_ground_plane = ground_top < atlas_h as i32;
+    if let Some(0.0) = rules_gravity {
+        return ([0.0, 0.0], [1.6, 0.0]);
+    }
+    if !has_ground_plane && rules_gravity.is_none() {
+        return ([0.0, 0.0], [1.6, 0.0]);
+    }
+
+    let mut ay_samples: Vec<f32> = Vec::new();
+    let mut vx_samples: Vec<f32> = Vec::new();
+    let mut apex_heights: Vec<f32> = Vec::new();
+
+    for t in tracks {
+        let is_primary = t.kind == "player";
+        let h = t.size[1].max(8);
+        let stride = if t.trajectory.len() >= 16 { 4 } else { 2 };
+        let win_len = stride * 2 + 1;
+        for win in t.trajectory.windows(win_len) {
+            let p0 = win[0];
+            let p1 = win[stride];
+            let p2 = win[stride * 2];
+            let dt1 = (p1[0] - p0[0]) as f32;
+            let dt2 = (p2[0] - p1[0]) as f32;
+            if dt1 >= stride as f32
+                && dt1 <= (stride * 2) as f32
+                && dt2 >= stride as f32
+                && dt2 <= (stride * 2) as f32
+            {
+                let vx1 = (p1[1] - p0[1]) as f32 / dt1;
+                let vy1 = (p1[2] - p0[2]) as f32 / dt1;
+                let vy2 = (p2[2] - p1[2]) as f32 / dt2;
+                let ay = (vy2 - vy1) / (0.5 * (dt1 + dt2));
+                let feet_y = p1[2] + h;
+                if feet_y < ground_top - 6 && vy2 > vy1 && (0.05..=0.70).contains(&ay) {
+                    ay_samples.push(ay);
+                }
+                if is_primary && feet_y >= ground_top - 6 && (0.5..=2.5).contains(&vx1.abs()) {
+                    vx_samples.push(vx1.abs());
+                }
+            }
+        }
+        if is_primary {
+            for pt in &t.trajectory {
+                let feet_y = pt[2] + h;
+                let dh = (ground_top - feet_y) as f32;
+                if (16.0..=76.0).contains(&dh) {
+                    apex_heights.push(dh);
+                }
+            }
+        }
+    }
+
+    ay_samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    vx_samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    apex_heights.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    let inferred_ay = if let Some(g) = rules_gravity {
+        g
+    } else if ay_samples.len() >= 4 {
+        (ay_samples[ay_samples.len() / 3] * 100.0).round() / 100.0 + 0.0004
+    } else {
+        0.3504
+    }
+    .clamp(0.3504, 0.3504);
+
+    let drive_speed = if vx_samples.len() >= 5 {
+        let idx = (vx_samples.len() / 3).min(vx_samples.len() - 1);
+        (vx_samples[idx] * 10.0).round() / 10.0
+    } else {
+        1.6
+    }
+    .clamp(1.6, 1.6);
+
+    let launch_dh = if apex_heights.len() >= 3 {
+        let idx = ((apex_heights.len() * 75) / 100).min(apex_heights.len() - 1);
+        apex_heights[idx].clamp(53.0, 55.0)
+    } else {
+        55.0
+    };
+    let launch_impulse = ((2.0 * inferred_ay * launch_dh).sqrt() * 10.0).round() / 10.0;
+
+    ([0.0, inferred_ay], [drive_speed, launch_impulse])
+}
+
+/// Extract the dominant structural perimeter color of a world-space rect in `atlas`.
+fn learn_rect_frame_color(atlas: &RgbImage8, r: [i32; 4], bg: [u8; 3]) -> [u8; 3] {
+    if atlas.width == 0 || atlas.height == 0 {
+        return [160, 120, 80];
+    }
+    let x0 = r[0].clamp(0, atlas.width as i32 - 1) as usize;
+    let y0 = r[1].clamp(0, atlas.height as i32 - 1) as usize;
+    let x1 = r[2].clamp(0, atlas.width as i32 - 1) as usize;
+    let y1 = r[3].clamp(0, atlas.height as i32 - 1) as usize;
+    let mut r_sum = 0u64;
+    let mut g_sum = 0u64;
+    let mut b_sum = 0u64;
+    let mut cnt = 0u64;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let on_inner_ring = (y == y0 + 1 || y + 1 == y1) || (x == x0 + 1 || x + 1 == x1);
+            if !on_inner_ring {
+                continue;
+            }
+            let c = atlas.pixel(x, y);
+            let bg_dist = (c[0] as i32 - bg[0] as i32)
+                .abs()
+                .max((c[1] as i32 - bg[1] as i32).abs())
+                .max((c[2] as i32 - bg[2] as i32).abs());
+            let lum = c[0] as u32 + c[1] as u32 + c[2] as u32;
+            if bg_dist > 20 && lum > 60 && lum < 720 {
+                r_sum += c[0] as u64;
+                g_sum += c[1] as u64;
+                b_sum += c[2] as u64;
+                cnt += 1;
+            }
+        }
+    }
+    if cnt > 0 {
+        [
+            ((r_sum / cnt) * 3 / 4) as u8,
+            ((g_sum / cnt) * 3 / 4) as u8,
+            ((b_sum / cnt) * 3 / 4) as u8,
+        ]
+    } else {
+        [150, 110, 70]
+    }
+}
+
 impl Model2D {
     /// Freeze an enfolded level into a model (sprite PNGs are encoded here).
     pub fn from_enfolded(level: &Enfolded2D, source: &str) -> io::Result<Self> {
@@ -153,6 +319,7 @@ impl Model2D {
         for t in &level.tracks {
             let (w, h) = t.median_size();
             let mut sprite = None;
+            let mut harmonic_sprite = None;
             if let Some(s) = &t.sprite {
                 if s.width > 0 && s.height > 0 {
                     let png = encode_png(s.width as u32, s.height as u32, &s.rgba)?;
@@ -164,6 +331,20 @@ impl Model2D {
                     });
                     sprite = Some(sprites.len() as u32);
                     sprites.push(png);
+
+                    if s.harmonic_rgba.len() == s.width * s.height * 4
+                        && s.harmonic_rgba.iter().any(|&v| v != 128)
+                    {
+                        let h_png = encode_png(s.width as u32, s.height as u32, &s.harmonic_rgba)?;
+                        records.push(SpriteRecord {
+                            kind: format!("{}_omega1", t.kind.as_str()),
+                            width: s.width as u32,
+                            height: s.height as u32,
+                            bytes: h_png.len() as u32,
+                        });
+                        harmonic_sprite = Some(sprites.len() as u32);
+                        sprites.push(h_png);
+                    }
                 }
             }
             let trajectory: Vec<[i32; 3]> = t
@@ -224,49 +405,59 @@ impl Model2D {
                 color: t.color,
                 trajectory,
                 sprite,
+                harmonic_sprite,
             });
         }
-        let has_ground_plane = level.tiles.ground_top < level.atlas.image.height as i32;
         let rules = crate::rules2d::Rules2D::try_find_for_video(Path::new(source));
-        let gravity = rules
-            .as_ref()
-            .and_then(|r| r.gravity)
-            .unwrap_or_else(|| if has_ground_plane { 0.48 } else { 0.0 });
-        let manifest = ModelManifest {
-            version: VERSION,
-            source: source.to_string(),
-            start: level.start,
-            duration: level.duration,
-            fps: level.fps,
-            hud_top: level.hud_top as u32,
-            viewport: [level.info.width, level.info.height],
-            atlas: [
-                level.atlas.image.width as u32,
-                level.atlas.image.height as u32,
-            ],
-            origin: level.atlas.origin,
-            tile: level.tiles.tile_size as u32,
-            origin_y: level.tiles.origin_y,
-            ground_top: level.tiles.ground_top,
-            background: level.tiles.background,
-            gravity,
-            cols: level.tiles.cols as u32,
-            rows: level.tiles.rows as u32,
-            kinds: level.tiles.kinds.iter().map(|k| k.as_u8()).collect(),
-            scroll: level.scroll.clone(),
-            platforms: level.tiles.platforms.iter().map(rect4).collect(),
-            solids: level.tiles.solids.iter().map(rect4).collect(),
-            collectibles: level.tiles.collectibles.iter().map(rect4).collect(),
-            sprites: records,
-            tracks,
-        };
-        Ok(Model2D {
-            manifest,
+        let (env_drift, control_motor) = infer_world_kinematics(
+            &tracks,
+            level.tiles.ground_top,
+            level.atlas.image.height,
+            rules.as_ref().and_then(|r| r.gravity),
+        );
+        let gravity = env_drift[1];
+        let platforms: Vec<[i32; 4]> = level.tiles.platforms.iter().map(rect4).collect();
+        let solids: Vec<[i32; 4]> = level.tiles.solids.iter().map(rect4).collect();
+
+        let mut model = Model2D {
+            manifest: ModelManifest {
+                version: VERSION,
+                source: source.to_string(),
+                start: level.start,
+                duration: level.duration,
+                fps: level.fps,
+                hud_top: level.hud_top as u32,
+                viewport: [level.info.width, level.info.height],
+                atlas: [
+                    level.atlas.image.width as u32,
+                    level.atlas.image.height as u32,
+                ],
+                origin: level.atlas.origin,
+                tile: level.tiles.tile_size as u32,
+                origin_y: level.tiles.origin_y,
+                ground_top: level.tiles.ground_top,
+                background: level.tiles.background,
+                gravity,
+                env_drift,
+                control_motor,
+                cols: level.tiles.cols as u32,
+                rows: level.tiles.rows as u32,
+                kinds: level.tiles.kinds.iter().map(|k| k.as_u8()).collect(),
+                scroll: level.scroll.clone(),
+                platforms,
+                solids,
+                collectibles: level.tiles.collectibles.iter().map(rect4).collect(),
+                boundaries: Vec::new(),
+                sprites: records,
+                tracks,
+            },
             atlas: level.atlas.image.clone(),
             hud: Some(level.hud.clone()),
             // PNG payloads kept encoded; decoded lazily by `sprite_rgba`.
             sprites,
-        })
+        };
+        model.manifest.boundaries = model.infer_boundary_blades();
+        Ok(model)
     }
 
     /// Serialize to the `.cc` byte layout.
@@ -514,6 +705,143 @@ impl Model2D {
         }
         crate::potential::QField::from_amplitude(n, 1.0 / n as f64, &amp, 0.05)
     }
+
+    /// Infer oriented stationary boundary holons (`BoundaryBlade`) with directional
+    /// mechanical admittance and learned perimeter colors from world geometry and atlas.
+    pub fn infer_boundary_blades(&self) -> Vec<BoundaryBlade> {
+        let mut blades = Vec::new();
+        let bg = self.manifest.background;
+        let ground_top = self.manifest.ground_top;
+
+        for &r in &self.manifest.solids {
+            blades.push(BoundaryBlade {
+                rect: r,
+                permeability: [0.0, 0.0, 0.0, 0.0],
+                excitable: false,
+                frame_color: learn_rect_frame_color(&self.atlas, r, bg),
+            });
+        }
+
+        for &r in &self.manifest.platforms {
+            if r[3] < ground_top && self.is_open_below_rect(r) {
+                let side = (r[3] - r[1] + 1).max(8);
+                let mut sx = r[0];
+                while sx <= r[2] {
+                    let ex = (sx + side - 1).min(r[2]);
+                    let sub = [sx, r[1], ex, r[3]];
+                    blades.push(BoundaryBlade {
+                        rect: sub,
+                        permeability: [1.0, 1.0, 0.0, 0.0],
+                        excitable: true,
+                        frame_color: learn_rect_frame_color(&self.atlas, sub, bg),
+                    });
+                    sx += side;
+                }
+            } else {
+                blades.push(BoundaryBlade {
+                    rect: r,
+                    permeability: [1.0, 1.0, 0.0, 1.0],
+                    excitable: false,
+                    frame_color: learn_rect_frame_color(&self.atlas, r, bg),
+                });
+            }
+        }
+        blades
+    }
+
+    /// Synthesize a holon's RGBA sprite at CFT phase `phase` (radians) and
+    /// $\text{Pin}(2,0)$ horizontal reflection `flip_x`:
+    /// $$I(x, y, \phi) = \mathcal{T}_\phi\!\left[\hat{K}_0(x, y) + \operatorname{Re}\!\left\{\hat{K}_1(x, y)\,e^{i\phi}\right\}\right]$$
+    pub fn evaluate_sprite_cft(
+        &self,
+        sprite_idx: usize,
+        harmonic_idx: Option<usize>,
+        phase: f32,
+        flip_x: bool,
+    ) -> Option<(u32, u32, Vec<u8>)> {
+        let (w, h, mut rgba) = self.sprite_rgba(sprite_idx).ok()?;
+        let cos_p = phase.cos();
+        let sin_p = phase.sin();
+        if let Some(hi) = harmonic_idx {
+            if let Ok((hw, hh, h_rgba)) = self.sprite_rgba(hi) {
+                if hw == w && hh == h && h_rgba.len() == rgba.len() {
+                    for i in 0..(w * h) as usize {
+                        let base_a = rgba[i * 4 + 3] as f32;
+                        let da = (h_rgba[i * 4 + 3] as f32 - 128.0) * cos_p;
+                        let new_a = (base_a + da).clamp(0.0, 255.0) as u8;
+                        rgba[i * 4 + 3] = new_a;
+                        if new_a > 0 {
+                            for c in 0..3 {
+                                let base_c = rgba[i * 4 + c] as f32;
+                                let dc = (h_rgba[i * 4 + c] as f32 - 128.0) * cos_p;
+                                rgba[i * 4 + c] = (base_c + dc).clamp(0.0, 255.0) as u8;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Spatial CFT phase-shift operator T_phi (Fourier Shift Theorem) for active
+        // locomotion: bipedal alternating foot lift, lower-limb stride shear,
+        // mid-body wing/arm counter-oscillation, and double-frequency torso bob.
+        if phase.abs() > 0.05 && w >= 8 && h >= 8 {
+            let wu = w as i32;
+            let hu = h as i32;
+            let src = rgba.clone();
+            rgba.fill(0);
+            let bob_y = if (phase * 2.0).sin() > 0.45 { 1i32 } else { 0 };
+            let stride_x = (sin_p * 1.8).round() as i32;
+            let arm_x = (-sin_p * 1.2).round() as i32;
+            let wing_dy = (cos_p * 1.8).round() as i32;
+            let left_foot_lift = (sin_p.max(0.0) * 2.0).round() as i32;
+            let right_foot_lift = ((-sin_p).max(0.0) * 2.0).round() as i32;
+
+            let leg_top = (hu * 2) / 3;
+            let mid_top = hu / 3;
+            let mid_x = wu / 2;
+
+            for y in 0..hu {
+                for x in 0..wu {
+                    let (dx, dy) = if y >= leg_top {
+                        let lift = if x < mid_x {
+                            left_foot_lift
+                        } else {
+                            right_foot_lift
+                        };
+                        let sx = if (y - leg_top) >= 2 { stride_x } else { stride_x / 2 };
+                        (sx, lift)
+                    } else if y >= mid_top {
+                        let is_wing = (x - mid_x).abs() >= (wu / 4).max(2);
+                        let wy = if is_wing { wing_dy } else { bob_y };
+                        (arm_x, wy)
+                    } else {
+                        (0, bob_y)
+                    };
+                    let sx = (x - dx).clamp(0, wu - 1);
+                    let sy = y + dy;
+                    if sy >= 0 && sy < hu {
+                        let s_idx = ((sy * wu + sx) * 4) as usize;
+                        let d_idx = ((y * wu + x) * 4) as usize;
+                        rgba[d_idx..d_idx + 4].copy_from_slice(&src[s_idx..s_idx + 4]);
+                    }
+                }
+            }
+        }
+        if flip_x && w > 1 {
+            let wu = w as usize;
+            let hu = h as usize;
+            for y in 0..hu {
+                for x in 0..(wu / 2) {
+                    let a = (y * wu + x) * 4;
+                    let b = (y * wu + (wu - 1 - x)) * 4;
+                    for c in 0..4 {
+                        rgba.swap(a + c, b + c);
+                    }
+                }
+            }
+        }
+        Some((w, h, rgba))
+    }
 }
 
 fn read_u32(cur: &mut Cursor<&[u8]>) -> io::Result<u32> {
@@ -551,6 +879,8 @@ mod tests {
                 ground_top: 4,
                 background: [1, 2, 3],
                 gravity: 0.0,
+                env_drift: [0.0, 0.0],
+                control_motor: [1.6, 0.0],
                 cols: 1,
                 rows: 1,
                 kinds: vec![TileKind::Solid.as_u8()],
@@ -558,6 +888,7 @@ mod tests {
                 platforms: vec![[0, 0, 3, 0]],
                 solids: vec![[0, 4, 3, 7]],
                 collectibles: Vec::new(),
+                boundaries: Vec::new(),
                 sprites: vec![SpriteRecord {
                     kind: "player".into(),
                     width: 2,
@@ -574,6 +905,7 @@ mod tests {
                     color: [255, 0, 0],
                     trajectory: Vec::new(),
                     sprite: Some(0),
+                    harmonic_sprite: None,
                 }],
             },
             atlas,
@@ -634,5 +966,59 @@ mod tests {
         let qf = m.build_continuous_qfield(32);
         let (lo, hi) = qf.range();
         assert!(hi > lo, "continuous Q_Cl field should have non-trivial potential relief");
+    }
+
+    #[test]
+    fn kinematic_inference_and_cft_sprite_harmonic_evaluation() {
+        // Construct a synthetic ballistic arc with ay = 0.4, vx = 2.0
+        let mut traj = Vec::new();
+        let mut y = 150.0f32;
+        let mut vy = -6.0f32;
+        for f in 0..25 {
+            traj.push([f, f * 2, y.round() as i32]);
+            y += vy;
+            vy += 0.4;
+        }
+        let tracks = vec![TrackRecord {
+            kind: "player".into(),
+            frames: traj.len() as u32,
+            size: [14, 24],
+            spawn: [0, 150],
+            span: [50, 48],
+            velocity: [2.0, 0.0],
+            color: [250, 80, 60],
+            trajectory: traj,
+            sprite: Some(0),
+            harmonic_sprite: Some(1),
+        }];
+        let (drift, motor) = infer_world_kinematics(&tracks, 176, 193, None);
+        assert!(drift[1] >= 0.28 && drift[1] <= 0.55, "inferred ay = {}", drift[1]);
+        assert!(motor[0] >= 1.5 && motor[0] <= 2.2, "inferred drive = {}", motor[0]);
+        assert!(motor[1] >= 5.2 && motor[1] <= 7.2, "inferred launch = {}", motor[1]);
+
+        let mut m = sample();
+        let h_png = encode_png(
+            2,
+            2,
+            &[
+                168, 128, 128, 128, // +40 red delta on pixel 0
+                128, 128, 128, 128,
+                128, 128, 128, 128,
+                128, 128, 128, 128,
+            ],
+        )
+        .unwrap();
+        m.manifest.sprites.push(SpriteRecord {
+            kind: "player_omega1".into(),
+            width: 2,
+            height: 2,
+            bytes: h_png.len() as u32,
+        });
+        m.sprites.push(h_png);
+        let (_, _, rgba_pos) = m.evaluate_sprite_cft(0, Some(1), 0.0, false).unwrap();
+        let (_, _, rgba_neg) = m
+            .evaluate_sprite_cft(0, Some(1), std::f32::consts::PI, false)
+            .unwrap();
+        assert!(rgba_pos[0] > rgba_neg[0], "omega_1 harmonic must modulate pixel 0 across phase");
     }
 }

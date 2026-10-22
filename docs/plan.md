@@ -135,11 +135,19 @@ Compute the 2D spatial CFT cross-power spectrum $\frac{\hat{I}_t \hat{I}_{t-1}^*
 8. **Visual-Physical Support Coincidence & Phantom-Overhang Elimination:** Eliminated 1-px border bleed into adjacent empty tiles (`overlap >= 4 px`) and replaced hardcoded player hitbox constants (`PW`, `PH`, `head_ext`) with learned `TrackRecord::size` dimensions so upward block impacts and top-down stomps coincide to the pixel (`impacts=4, coins=1` on `smb3.cc`).
 9. **Top-Down & Vertical Flight Shmup Benchmark (`example_input2d_raptor`):** Generalized `Ortho2D-Scroll` to vertical translational camera ego motors ($M_{\text{ego}}(t) = \exp(-\frac{1}{2} v_y e_{02} \Delta t)$), decoupled zero-gravity scrolling worlds ($g = 0$) from 1D platformer jumping, added abstract attached process effects (`AttachedWake` trailing excitations along $-\mathbf{s}$, `SolitonProjectile` along $+\mathbf{s}$, `FieldExcitation` collectible absorption, and `RadialDispersion` burst on state idempotent collapse), enfolded *Raptor: Call of the Shadows* into `example_input2d_raptor/raptor.cc` (320x684 stitched level atlas, 12 actor tracks), and verified playable unfoldment at $> 2,600\text{ Hz}$ (`recordings/task_demo_raptor_playable.mp4`).
 
-#### Next Generalization Tasks (Phase 2.5 — Pre-3D Hardening)
-- [ ] **Unified Continuous `WorldState2D` Step:** Merge the `gravity == 0.0` planar arena loop and `gravity > 0.0` gravitational loop in `cc_cli` into a single `WorldState2D::step` parameterized continuously by `manifest.gravity` and `FieldExcitation` holons.
-- [ ] **Spinor Pixel Factorization During Multi-Actor Occlusions:** Split compound residual blobs ($\text{area} > 1.5\,\text{area}_0$) in Pass 2 by projecting pixels onto the nearest open track's chromatic spinor $\psi_k$, eliminating 2–5 frame occlusion gaps when actors cross paths.
-- [ ] **Trajectory-Fitted Kinematic Constants (`gravity`, `run_speed`, `jump_impulse`):** Fit downward parabolic acceleration $\Delta^2 y_t$, horizontal cruise speed, and jump impulse directly from the extracted `Player` trajectory in `enfold2d` instead of using default constants.
-- [ ] **2D+t CFT Sprite Walk-Cycle Kernel ($\omega_0, \omega_1$ modes):** Store the first temporal harmonic $\omega_1$ alongside the static mode $\omega_0$ in `.cc` sprite payloads for spectral limb/chomp animation synthesis.
+#### Phase 2.5 — Pure Implicate Dynamics & De-Clichéing (Completed)
+
+1. **Inferred Background Drift & Impulse Generators (Replacing Hardcoded `gravity`, `RUN`, `JUMP`):**
+   - [X] Replaced `manifest.gravity` (`0.48` if `has_ground_plane`) and runtime constants (`RUN = 1.6`, `JUMP = 6.2`) with `env_drift: [f32; 2]` and `control_motor: [f32; 2]` regressed via `infer_world_kinematics` over multi-frame finite differences $\ddot{\mathbf{x}}_i(t)$ and ballistic apex heights $\Delta h$ (`crates/cc_field/src/model2d.rs`).
+2. **Empirical Boundary Admittance Blades & Pre-Incidence Causal Texture Restoration (Replacing `BlockProp` and `?` Glyph Forgery):**
+   - [X] Added `BoundaryBlade` (`rect`, `permeability: [left, right, top, bottom]`, `excitable`, `frame_color`) inferred via `Model2D::infer_boundary_blades`.
+   - [X] Added pre-incidence causal restoration in `enfold2d::enfold` (`init_acc` over pre-impact frames) so excitable blocks retain their genuine video State 0 appearance in `atlas` while `frame_color` captures their post-incidence State 2 perimeter color—deleting `BlockProp` and the hardcoded `Question mark glyph pattern` in `crates/cc_cli/src/main.rs`.
+3. **2D+t CFT Vitality Kernels (Replacing Procedural Pixel Shaders):**
+   - [X] Extracted DC ($\omega_0$) and first temporal harmonic ($\omega_1$, stored in `harmonic_sprite`) CFT kernels in `enfold2d` Pass 3 and added `Model2D::evaluate_sprite_cft(sprite_idx, harmonic_idx, phase, flip_x)`.
+   - [X] Deleted all procedural pixel routines in `cc_cli` (`chomp_open` wedge cut, `skirt_shift`, pupil RGB shifts, and `?` glyph drawing).
+4. **Unified Continuous `WorldState2D` Step & Spinor Occlusion Factorization:**
+   - [X] Merged the `is_static`, `is_flight`, and terrestrial loops in `crates/cc_cli/src/main.rs` into a single `WorldState2D::step` and `WorldState2D::render`.
+   - [X] Added spinor factorization of 2-body crossing occlusions in `track_actors_coherent` (verified by `enfold2d::tests::spinor_factorization_splits_crossing_tracks`) and removed Mario-specific `ActorKind::Goomba` / `Koopa` enum variants.
 
 
 ### Phase 3: 3D Raycast Compiler & Wolfenstein 3D Extraction (`cc_field` 3D)

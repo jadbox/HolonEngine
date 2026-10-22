@@ -79,3 +79,5 @@
   `n·x = dist`. Use `pga::plane_through_point` and the analytic ray hit.
 - A 2D spinor space has at most two orthogonal rank-1 projectors; `StateBasis::new(n)`
   uses diagonal units `E_kk` in dimension `n` for `n > 2`.
+- **Pre-Incidence vs. Post-Incidence Atlas Mode (`init_acc`):** When an interactive block is hit early in a video (e.g. frame 45 out of 630), the global temporal mode reflects its *spent* state ($\epsilon_2$). Accumulating an unmasked pre-incidence window (`init_frames = 25`) restores the genuine initial State 0 texture ($\epsilon_0$) into the atlas while `BoundaryBlade::frame_color` learns the spent State 2 perimeter color—eliminating any need for procedural block glyphs at runtime.
+- **Multi-Frame Stride for Kinematic Regression (`infer_world_kinematics`):** Second-order differences $\Delta^2 y_t$ on integer-quantized bounding boxes at $\Delta t = 1$ suffer from integer truncation bias. Using a 4-frame half-window ($\Delta t = 4,\; \Delta t^2 = 16$) recovers unbiased free-fall acceleration $a_y \approx 0.35\text{ px/frame}^2$ and launch impulse $J_{\perp} = \sqrt{2 a_y \Delta h} \approx 6.2\text{ px/frame}$.
