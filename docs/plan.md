@@ -180,3 +180,5 @@ Development NOTES:
 - save generated models (like smb3_v2.cc) into the example folder it was used to be generated from (i.e. example_input2d) and override cc models as needed.
 - If you pretty sure you fixed a visual bug, do another new video recording so I can keep up to date. Smartly determine if the bug fix requires folding a new model or just using the last built one (if the bug was just in the use of the model).
 - Consider updating docs/holon_whitepaper.md with any key notable engine design systems concepts like using CliffordDensityElement.
+- Be careful of using special constants and magic numbers to fix things like goomba wings. Remember we are to harmonize all game logic over special game-specific case logic. By our docs/holon_philosophy.md guide, we should almost try to treat the game as if it was any kind of video with very complicated entities to encode into higher space. No special constants or magic numbers for a specific game!
+- For debugging: build and use the debugging cli tool: `holon-debug --help`

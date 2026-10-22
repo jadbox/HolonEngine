@@ -586,13 +586,7 @@ impl WorldState2D {
             } else {
                 1.0
             };
-            let spawn_delay = if vertical_corridor {
-                auto_idx * 35
-            } else if planar_static {
-                t.trajectory.first().map(|p| p[0].max(0) as usize).unwrap_or(0)
-            } else {
-                0
-            };
+            let spawn_delay = 0;
             holons.push(MobileHolon {
                 is_primary: false,
                 pos: [spawn_x, spawn_y],
@@ -696,11 +690,6 @@ impl WorldState2D {
         self.dispersions.retain(|d| d.timer > 0);
 
         // 3. Step primary holon (index 0) and autonomous holons.
-        let mut prev_primary_feet = 0.0f32;
-        if let Some(primary) = self.holons.first() {
-            prev_primary_feet = primary.pos[1] + primary.size[1];
-        }
-
         if ay > 0.0 {
             // Terrestrial drift regime: geodesic forward drive + boundary-probed launch motor.
             let mut hit_boundary: Option<usize> = None;
@@ -726,7 +715,8 @@ impl WorldState2D {
                                 && probe_y.floor() as i32 <= b.blade.rect[3]
                         })
                 });
-                let gap = model.solid_at_world(ahead, foot_y).is_none()
+                let gap = foot_y >= (m.ground_top as f32 - 6.0)
+                    && model.solid_at_world(ahead, foot_y).is_none()
                     && model.one_way_at_world(ahead, foot_y).is_none();
                 let center_x = (px + pw * 0.5).floor() as i32;
                 let foot_yi = foot_y.floor() as i32;
@@ -869,15 +859,19 @@ impl WorldState2D {
                 .first()
                 .map(|p| (p.pos[0], p.pos[1], p.size[0], p.size[1], p.vel[1]))
                 .unwrap_or((0.0, 0.0, 12.0, 24.0, 0.0));
-            let view_right = px + self.vw as f32;
+            let view_right = (self.cam[0] + self.vw) as f32;
             let mut new_impacts = 0usize;
             let mut bounce_player = false;
+            let mut bounce_contact_y: Option<f32> = None;
 
             for a in self.holons.iter_mut().skip(1) {
                 if a.cde.state() == 2 {
                     // [Primitive State Idempotents: Collapsed Ideal Attenuation]
                     // Attenuate left-ideal amplitude R toward 0 after collapse into \epsilon_2.
                     a.cde.amplitude = (a.cde.amplitude - 0.08).max(0.0);
+                    continue;
+                }
+                if frame < a.spawn_delay {
                     continue;
                 }
                 // [Bilinear Invariant: Bohmian Momentum] P_B = rho * v_0 * s
@@ -912,8 +906,8 @@ impl WorldState2D {
                 let vx = vx_f64 as f32;
                 let amp_y = (a.bounds_y[1] - a.bounds_y[0]).max(0.0);
                 a.pos[0] += vx;
-                a.phase += if amp_y >= 18.0 {
-                    vx.abs() * 0.75
+                a.phase += if a.harmonic_idx.is_some() {
+                    0.45
                 } else {
                     vx.abs() * 0.35
                 };
@@ -921,7 +915,6 @@ impl WorldState2D {
                 // Surface support coupling resolved before lateral wall probe so
                 // actors on raised terrain steps never probe into the step below them.
                 let center_x = a.pos[0] + a.size[0] * 0.5;
-                let feet = a.pos[1] + a.size[1];
                 let mut surface_top: Option<f32> = None;
                 for b in &self.boundaries {
                     if b.blade.permeability == [0.0, 0.0, 0.0, 0.0]
@@ -929,7 +922,7 @@ impl WorldState2D {
                         && (center_x as i32) <= b.blade.rect[2]
                     {
                         let top = b.blade.rect[1] as f32;
-                        if feet >= top - (8.0 + amp_y) && feet <= top + 24.0 {
+                        if top >= a.pos[1] - 4.0 {
                             surface_top = Some(surface_top.map_or(top, |t| t.min(top)));
                         }
                     }
@@ -941,15 +934,15 @@ impl WorldState2D {
                             && (center_x as i32) <= b.blade.rect[2]
                         {
                             let top = b.blade.rect[1] as f32;
-                            if feet >= top - (8.0 + amp_y) && feet <= top + 16.0 {
+                            if top >= a.pos[1] - 4.0 {
                                 surface_top = Some(surface_top.map_or(top, |t| t.min(top)));
                             }
                         }
                     }
                 }
                 if let Some(top) = surface_top {
-                    let hop_dy = if amp_y >= 18.0 {
-                        (amp_y * 0.55) * (a.phase * 0.40).sin().abs()
+                    let hop_dy = if amp_y > 4.0 {
+                        (amp_y * 0.55) * (a.phase * 0.5).sin().abs()
                     } else {
                         0.0
                     };
@@ -963,7 +956,6 @@ impl WorldState2D {
                 };
                 let hit_wall = [a.pos[1] + 2.0, a.pos[1] + a.size[1] * 0.5].iter().any(|&cy| {
                     model.solid_at_world(check_x, cy).is_some()
-                        || model.one_way_at_world(check_x, cy).is_some()
                 });
                 if hit_wall {
                     // [Primitive State Idempotents & Incidence Transitions: Lateral Boundary Reflection]
@@ -972,24 +964,35 @@ impl WorldState2D {
                 }
 
                 // [Primitive State Idempotents & Incidence Transitions: Top-Down Incidence / Collapse]
-                // (P_player ∧ L_actor_top = 0 with v_y > 0)
+                // (P_player ∧ L_actor_top = 0 from above)
                 let p_feet = py + ph;
-                let stomp_band = (a.size[1] * 0.55).max(8.0);
-                if pvy > 0.0
+                let p_cy = py + ph * 0.5;
+                let a_upper = a.pos[1] + a.size[1] * 0.70;
+                let airborne = p_feet < (m.ground_top as f32 - 2.0);
+                if (pvy > 0.0 || airborne)
                     && p_feet >= a.pos[1]
-                    && prev_primary_feet <= a.pos[1] + stomp_band
-                    && (px + pw) > a.pos[0]
-                    && px < (a.pos[0] + a.size[0])
+                    && p_cy <= a_upper
+                    && (px + pw) > a.pos[0] + 1.0
+                    && px < (a.pos[0] + a.size[0] - 1.0)
                 {
                     let _ = a.cde.transition_to(2, &self.basis);
                     a.cde.amplitude = 1.0;
                     bounce_player = true;
+                    bounce_contact_y = Some(a.pos[1]);
                     new_impacts += 1;
                 }
             }
             if bounce_player {
                 if let Some(p) = self.holons.first_mut() {
-                    p.vel[1] = -launch_impulse * 0.90;
+                    if let Some(top) = bounce_contact_y {
+                        p.pos[1] = (top - ph).min(p.pos[1]);
+                    }
+                    p.vel[1] = -launch_impulse * 0.85;
+                }
+            }
+            if bounce_player {
+                if let Some(p) = self.holons.first_mut() {
+                    p.vel[1] = -launch_impulse * 0.85;
                 }
             }
             self.impacts += new_impacts;
@@ -1799,5 +1802,20 @@ mod tests {
             world.holons[0].pos[0] > 32.0,
             "primary holon should advance under control motor"
         );
+    }
+
+    #[test]
+    fn smb3_winged_goomba_stomp_and_platforms() {
+        let p = std::path::Path::new("/tmp/smb3.cc");
+        if !p.exists() {
+            return;
+        }
+        let model = Model2D::load(p).unwrap();
+        let mut world = WorldState2D::new(&model);
+        for f in 0..600 {
+            world.step(&model, f);
+        }
+        assert!(world.impacts >= 3, "expected at least 3 impacts (including stomps), got {}", world.impacts);
+        assert!(world.excitations_absorbed >= 1, "expected at least 1 excitation absorbed, got {}", world.excitations_absorbed);
     }
 }

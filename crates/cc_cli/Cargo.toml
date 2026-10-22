@@ -16,3 +16,7 @@ libc.workspace = true
 [[bin]]
 name = "holon"
 path = "src/main.rs"
+
+[[bin]]
+name = "holon-debug"
+path = "src/bin/holon_debug.rs"

@@ -1627,7 +1627,7 @@ impl Default for TileOptions {
             min_w: 12,
             min_h: 10,
             min_fill: 0.6,
-            min_flat: 0.8,
+            min_flat: 0.65,
             tile_size: 16,
             is_static: false,
             hud_bottom: 0,
@@ -2188,11 +2188,17 @@ pub fn extract_2d_tiles_with(atlas: &WorldAtlas, opts: &TileOptions) -> TileExtr
         if tops.is_empty() {
             continue;
         }
-        tops.sort_unstable();
-        let med = tops[tops.len() / 2];
+        let mut sorted_tops = tops.clone();
+        sorted_tops.sort_unstable();
+        let med = sorted_tops[sorted_tops.len() / 2];
         let flat =
-            tops.iter().filter(|t| (**t - med).abs() <= 1).count() as f64 / tops.len() as f64;
+            sorted_tops.iter().filter(|t| (**t - med).abs() <= 1).count() as f64 / sorted_tops.len() as f64;
         if flat < opts.min_flat {
+            continue;
+        }
+        let left_edge_droop = tops.first().copied().unwrap_or(med) - med;
+        let right_edge_droop = tops.last().copied().unwrap_or(med) - med;
+        if left_edge_droop >= 2 && right_edge_droop >= 2 && (left_edge_droop + right_edge_droop) >= 5 {
             continue;
         }
         let mut tx0_trim = cx0;
@@ -3017,14 +3023,13 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         let mut hs: Vec<i32> = tight_list.iter().map(|o| o.ty1 - o.ty0 + 1).collect();
         ws.sort_unstable();
         hs.sort_unstable();
-        let tw = ws[ws.len() / 2].clamp(6, 48) as usize;
-        let h_spread = hs.last().copied().unwrap_or(0) - hs.first().copied().unwrap_or(0);
-        let th_idx = if !is_static && h_spread >= 5 {
-            (hs.len() * 3 / 4).min(hs.len() - 1)
-        } else {
+        let q_idx = if is_static {
             hs.len() / 2
+        } else {
+            (hs.len() * 3 / 4).min(hs.len() - 1)
         };
-        let th = hs[th_idx].clamp(6, 48) as usize;
+        let tw = ws[ws.len() / 2].clamp(6, 48) as usize;
+        let th = hs[q_idx].clamp(6, 48) as usize;
 
         let mut candidates: Vec<&TightObs> = tight_list
             .iter()
@@ -3075,14 +3080,16 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
             (c, is_fg)
         };
 
-        let mut cand_hs: Vec<i32> = candidates.iter().map(|o| o.ty1 - o.ty0 + 1).collect();
-        cand_hs.sort_unstable();
-        let cand_h_spread =
-            cand_hs.last().copied().unwrap_or(0) - cand_hs.first().copied().unwrap_or(0);
-        let bottom_anchor = !is_static && cand_h_spread >= 5 && th >= 20;
-        let med_cand_h = cand_hs[cand_hs.len() / 2];
+        let mut cand_spans: Vec<i32> = candidates
+            .iter()
+            .map(|o| (o.tx1 - o.tx0 + 1) + (o.ty1 - o.ty0 + 1))
+            .collect();
+        cand_spans.sort_unstable();
+        let med_span = cand_spans[cand_spans.len() / 2];
+        let span_iqr =
+            cand_spans[(cand_spans.len() * 3 / 4).min(cand_spans.len() - 1)] - cand_spans[cand_spans.len() / 4];
 
-        // Choose cleanest reference observation for +-2 px translational registration
+        // Choose cleanest reference observation for translational registration
         let ref_obs = *candidates
             .iter()
             .max_by(|a, b| {
@@ -3093,12 +3100,10 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
             })
             .unwrap();
         let ref_p = &track_patches[ti][ref_obs.patch_idx];
+        let ref_cw = ref_obs.tx1 - ref_obs.tx0 + 1;
+        let ref_ch = ref_obs.ty1 - ref_obs.ty0 + 1;
         let ref_x0 = (ref_obs.tx0 + ref_obs.tx1 + 1 - tw as i32) / 2;
-        let ref_y0 = if bottom_anchor {
-            ref_obs.ty1 - th as i32 + 1
-        } else {
-            (ref_obs.ty0 + ref_obs.ty1 + 1 - th as i32) / 2
-        };
+        let ref_y0 = (ref_obs.ty0 + ref_obs.ty1 + 1 - th as i32) / 2;
         let mut ref_rgb = vec![[0u8; 3]; tw * th];
         let mut ref_mask = vec![false; tw * th];
         for sy in 0..th {
@@ -3122,32 +3127,30 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
 
         for obs in &candidates {
             let p = &track_patches[ti][obs.patch_idx];
+            let obs_cw = obs.tx1 - obs.tx0 + 1;
+            let obs_ch = obs.ty1 - obs.ty0 + 1;
             let base_x0 = (obs.tx0 + obs.tx1 + 1 - tw as i32) / 2;
-            let base_y0 = if bottom_anchor {
-                obs.ty1 - th as i32 + 1
-            } else {
-                (obs.ty0 + obs.ty1 + 1 - th as i32) / 2
-            };
+            let base_y0 = (obs.ty0 + obs.ty1 + 1 - th as i32) / 2;
+            let max_dx = ((ref_cw - obs_cw).abs() / 2 + 2).clamp(2, 4);
+            let max_dy = ((ref_ch - obs_ch).abs() / 2 + 2).clamp(2, 6);
             let mut best_shift = (0i32, 0i32);
             let mut best_cost = i64::MAX;
-            let dy_range = if bottom_anchor { -1..=1 } else { -2..=2 };
-            let sy_start = if bottom_anchor { th / 3 } else { 0 };
-            for dy in dy_range {
-                for dx in -2..=2 {
+            for dy in -max_dy..=max_dy {
+                for dx in -max_dx..=max_dx {
                     let mut cost = 0i64;
-                    for sy in sy_start..th {
+                    for sy in 0..th {
                         for sx in 0..tw {
                             let idx_s = sy * tw + sx;
                             let (c, fg) =
                                 sample_patch(p, base_x0 + dx + sx as i32, base_y0 + dy + sy as i32);
-                            if fg != ref_mask[idx_s] {
-                                cost += 2500;
-                            } else if fg {
+                            if fg && ref_mask[idx_s] {
                                 let rc = ref_rgb[idx_s];
                                 let dr = c[0] as i64 - rc[0] as i64;
                                 let dg = c[1] as i64 - rc[1] as i64;
                                 let db = c[2] as i64 - rc[2] as i64;
-                                cost += (dr * dr + dg * dg + db * db) / 3;
+                                cost += (dr * dr + dg * dg + db * db) / 2 - 2000;
+                            } else if fg != ref_mask[idx_s] {
+                                cost += 600;
                             }
                         }
                     }
@@ -3157,9 +3160,9 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
                     }
                 }
             }
-            let obs_h = obs.ty1 - obs.ty0 + 1;
-            let phase_pos = if bottom_anchor {
-                obs_h >= med_cand_h
+            let obs_span = obs_cw + obs_ch;
+            let phase_pos = if !is_static && span_iqr >= 3 {
+                obs_span >= med_span
             } else {
                 ((total / 4) % 2) == 0
             };
@@ -3456,14 +3459,18 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
     // median dimensions and chromatic spinor signature.
     let n_tracks = tracks.len();
     for i in 0..n_tracks {
-        if tracks[i].kind != ActorKind::Autonomous || clean_obs_counts[i] >= 6 {
+        if tracks[i].kind != ActorKind::Autonomous {
             continue;
         }
         let (wi, hi) = tracks[i].median_size();
         let ci = tracks[i].color;
         let mut best_peer: Option<usize> = None;
         for j in 0..n_tracks {
-            if i == j || tracks[j].kind != ActorKind::Autonomous || clean_obs_counts[j] < 12 {
+            if i == j
+                || tracks[j].kind != ActorKind::Autonomous
+                || clean_obs_counts[j] < 12
+                || clean_obs_counts[j] <= clean_obs_counts[i] * 2
+            {
                 continue;
             }
             let (wj, hj) = tracks[j].median_size();
@@ -3533,14 +3540,14 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
                 video_io::FrameReader::open_range(path, Some(start), Some(duration))?;
             let mut f_i = 0usize;
             while let Some(frame) = reader.next_frame()? {
-                if f_i >= n_frames || obs_count.iter().all(|&c| c >= 16) {
+                if f_i >= n_frames || obs_count.iter().all(|&c| c >= 24) {
                     break;
                 }
                 let off = refined[f_i];
                 let fw = frame.width as i32;
                 let fh = (hud_top as i32).min(frame.height as i32);
                 for (bi, sb) in sub_blocks.iter().enumerate() {
-                    if obs_count[bi] >= 16 {
+                    if obs_count[bi] >= 24 {
                         continue;
                     }
                     let fx0 = sb.x0 - off[0];
@@ -3564,52 +3571,54 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
                     let bw = (sb.x1 - sb.x0 + 1) as usize;
                     let bh = (sb.y1 - sb.y0 + 1) as usize;
                     let mut patch = vec![[0u8; 3]; bw * bh];
-                    let mut fill_bucket = Bucket::default();
                     for ly in 0..bh {
                         for lx in 0..bw {
                             let c = frame.pixel((fx0 + lx as i32) as u32, (fy0 + ly as i32) as u32);
                             patch[ly * bw + lx] = c;
-                            if lx >= 2 && lx + 2 < bw && ly >= 2 && ly + 2 < bh {
-                                fill_bucket.add(c);
-                            }
                         }
                     }
-                    let dom_c = fill_bucket.mode().map(|m| m.0).unwrap_or(tiles.background);
-                    let mut detail_cnt = 0usize;
-                    let mut center_mass = 0usize;
-                    let mut edge_touch = 0usize;
-                    let mut sum_x = 0.0f64;
-                    let x_lo = 2usize.min(bw);
-                    let x_hi = bw.saturating_sub(2);
-                    let y_lo = 3usize.min(bh);
-                    let y_hi = bh.saturating_sub(3).max(y_lo);
-                    for ly in y_lo..y_hi {
-                        for lx in x_lo..x_hi {
-                            let c = patch[ly * bw + lx];
-                            if color_dist(c, dom_c) > 35 {
-                                detail_cnt += 1;
-                                let rx = (lx - x_lo) as f64;
-                                sum_x += rx;
-                                if lx < x_lo + 2 || lx + 2 >= x_hi {
-                                    edge_touch += 1;
-                                } else if lx >= x_lo + 3 && lx + 3 < x_hi {
-                                    center_mass += 1;
-                                }
+                    if bw > 2 && bh > 2 {
+                        let iw = bw - 2;
+                        let ih = bh - 2;
+                        let mut sum_r = 0u64;
+                        let mut sum_g = 0u64;
+                        let mut sum_b = 0u64;
+                        for ly in 1..bh - 1 {
+                            for lx in 1..bw - 1 {
+                                let c = patch[ly * bw + lx];
+                                sum_r += c[0] as u64;
+                                sum_g += c[1] as u64;
+                                sum_b += c[2] as u64;
                             }
                         }
-                    }
-                    let score = if detail_cnt >= 6 && x_hi > x_lo + 1 {
-                        let ideal_cx = (x_hi - x_lo - 1) as f64 * 0.5;
-                        let cx = sum_x / detail_cnt as f64;
-                        (center_mass as f64) * 2.0
-                            - (edge_touch as f64) * 3.0
-                            - (cx - ideal_cx).abs() * 10.0
-                    } else {
-                        0.0
-                    };
-                    if score > best_score[bi] {
-                        best_score[bi] = score;
-                        best_patch[bi] = Some(patch);
+                        let cnt = (iw * ih) as f64;
+                        let mean_c = [
+                            sum_r as f64 / cnt,
+                            sum_g as f64 / cnt,
+                            sum_b as f64 / cnt,
+                        ];
+                        // Project interior chromatic contrast onto the 2D fundamental Continuous Fourier Transform mode:
+                        // Psi_1(x, y) = -cos(2*pi*(x + 0.5)/iw) * sin(pi*(y + 0.5)/ih).
+                        // Centered motifs score strongly positive; split/wrapped edge phases score negative.
+                        let mut score = 0.0f64;
+                        let iw_f = iw as f64;
+                        let ih_f = ih as f64;
+                        for ly in 0..ih {
+                            let wy = (std::f64::consts::PI * (ly as f64 + 0.5) / ih_f).sin();
+                            for lx in 0..iw {
+                                let wx = -(2.0 * std::f64::consts::PI * (lx as f64 + 0.5) / iw_f).cos();
+                                let c = patch[(ly + 1) * bw + (lx + 1)];
+                                let dr = c[0] as f64 - mean_c[0];
+                                let dg = c[1] as f64 - mean_c[1];
+                                let db = c[2] as f64 - mean_c[2];
+                                let d = (dr * dr + dg * dg + db * db).sqrt();
+                                score += d * wx * wy;
+                            }
+                        }
+                        if score > best_score[bi] {
+                            best_score[bi] = score;
+                            best_patch[bi] = Some(patch);
+                        }
                     }
                 }
                 f_i += 1;

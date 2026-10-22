@@ -245,7 +245,7 @@ pub fn infer_world_kinematics(
     } else {
         0.3504
     }
-    .clamp(0.3504, 0.3504);
+    .clamp(0.05, 1.5);
 
     let drive_speed = if vx_samples.len() >= 5 {
         let idx = (vx_samples.len() / 3).min(vx_samples.len() - 1);
@@ -253,11 +253,11 @@ pub fn infer_world_kinematics(
     } else {
         1.6
     }
-    .clamp(1.6, 1.6);
+    .clamp(0.5, 4.0);
 
     let launch_dh = if apex_heights.len() >= 3 {
         let idx = ((apex_heights.len() * 75) / 100).min(apex_heights.len() - 1);
-        apex_heights[idx].clamp(53.0, 55.0)
+        apex_heights[idx].clamp(16.0, 120.0)
     } else {
         55.0
     };
@@ -266,7 +266,8 @@ pub fn infer_world_kinematics(
     ([0.0, inferred_ay], [drive_speed, launch_impulse])
 }
 
-/// Extract the dominant structural perimeter color of a world-space rect in `atlas`.
+/// Extract the dominant structural fill color of a world-space rect in `atlas`,
+/// attenuated to represent its de-energized / collapsed state.
 fn learn_rect_frame_color(atlas: &RgbImage8, r: [i32; 4], bg: [u8; 3]) -> [u8; 3] {
     if atlas.width == 0 || atlas.height == 0 {
         return [160, 120, 80];
@@ -275,35 +276,36 @@ fn learn_rect_frame_color(atlas: &RgbImage8, r: [i32; 4], bg: [u8; 3]) -> [u8; 3
     let y0 = r[1].clamp(0, atlas.height as i32 - 1) as usize;
     let x1 = r[2].clamp(0, atlas.width as i32 - 1) as usize;
     let y1 = r[3].clamp(0, atlas.height as i32 - 1) as usize;
-    let mut r_sum = 0u64;
-    let mut g_sum = 0u64;
-    let mut b_sum = 0u64;
-    let mut cnt = 0u64;
-    for y in y0..=y1 {
-        for x in x0..=x1 {
-            let on_inner_ring = (y == y0 + 1 || y + 1 == y1) || (x == x0 + 1 || x + 1 == x1);
-            if !on_inner_ring {
-                continue;
-            }
+    let mut hist: std::collections::HashMap<(u8, u8, u8), (u32, [u64; 3])> =
+        std::collections::HashMap::new();
+    let ix0 = (x0 + 1).min(x1);
+    let ix1 = x1.saturating_sub(1).max(ix0);
+    let iy0 = (y0 + 1).min(y1);
+    let iy1 = y1.saturating_sub(1).max(iy0);
+    for y in iy0..=iy1 {
+        for x in ix0..=ix1 {
             let c = atlas.pixel(x, y);
             let bg_dist = (c[0] as i32 - bg[0] as i32)
                 .abs()
                 .max((c[1] as i32 - bg[1] as i32).abs())
                 .max((c[2] as i32 - bg[2] as i32).abs());
             let lum = c[0] as u32 + c[1] as u32 + c[2] as u32;
-            if bg_dist > 20 && lum > 60 && lum < 720 {
-                r_sum += c[0] as u64;
-                g_sum += c[1] as u64;
-                b_sum += c[2] as u64;
-                cnt += 1;
+            if bg_dist > 24 && lum > 96 && lum < 720 {
+                let key = (c[0] >> 3, c[1] >> 3, c[2] >> 3);
+                let entry = hist.entry(key).or_insert((0, [0; 3]));
+                entry.0 += 1;
+                entry.1[0] += c[0] as u64;
+                entry.1[1] += c[1] as u64;
+                entry.1[2] += c[2] as u64;
             }
         }
     }
-    if cnt > 0 {
+    if let Some((_, (cnt, sum))) = hist.into_iter().max_by_key(|(_, (cnt, _))| *cnt) {
+        let c = cnt as u64;
         [
-            ((r_sum / cnt) * 3 / 4) as u8,
-            ((g_sum / cnt) * 3 / 4) as u8,
-            ((b_sum / cnt) * 3 / 4) as u8,
+            ((sum[0] / c) * 3 / 4) as u8,
+            ((sum[1] / c) * 3 / 4) as u8,
+            ((sum[2] / c) * 3 / 4) as u8,
         ]
     } else {
         [150, 110, 70]

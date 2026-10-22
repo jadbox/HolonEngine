@@ -76,3 +76,11 @@ cargo build --release
 | [`crates/cc_math`](./crates/cc_math) | $\mathbb{G}_{2,0}$ multivectors (`Mv2`), Hiley's `CliffordDensityElement`, `CliffordQuantumPotential`, primitive `StateIdempotent` & `TransitionOperator`, and $\mathbb{G}_{3,0,1}$ PGA blades/motors. |
 | [`crates/cc_field`](./crates/cc_field) | Split-step Fourier wave solver, sampled `QField` gradients, `ffmpeg` video IO, 2D CFT scroll odometry, temporal-mode atlas stitcher, spinor-coherent actor tracker, and `.cc` (`CC2D`) container codec. |
 | [`crates/cc_cli`](./crates/cc_cli) | `holon` command-line compiler and runtime (`enfold`, `inspect`, `unfold`). |
+
+## Debugging
+
+For debugging, build and use the standalone inspection tool [`holon-debug`](./debug_readme.md):
+```bash
+cargo run --bin holon-debug -- <model.cc>
+```
+See [**`debug_readme.md`**](./debug_readme.md) for the overview structure, subcommands, and diagnostic workflow.
