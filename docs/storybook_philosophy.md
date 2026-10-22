@@ -1,6 +1,8 @@
 # From Video & Text to Playable Implicate Worlds
 ### Ontology and Mathematics of the Clifford World Compiler (`HolonEngine`)
 
+<small>by [Jonathan Dunlap](https://www.linkedin.com/in/jonathandunlap/)</small>
+
 ---
 
 ## I. The Double Trap of Modern Interactive Media & World Models
