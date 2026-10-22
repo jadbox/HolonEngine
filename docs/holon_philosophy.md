@@ -1,115 +1,50 @@
-# From Video & Text to Playable Implicate Worlds
-### Ontology and Mathematics of the Clifford World Compiler (`HolonEngine`)
+# From Observation to Living Worlds
+### The Process Philosophy of the Implicate World Compiler (`HolonEngine`)
 
 <small>by [Jonathan Dunlap](https://www.linkedin.com/in/jonathandunlap/)</small>
 
-*Foundational ontology:* [Dzog philosophy](https://github.com/jadbox/dzog/blob/main/philosophy.md) — relation-first computing over continuous fields.
+*Foundational ontology:* [Dzog philosophy](https://github.com/jadbox/dzog/blob/main/philosophy.md), relation-first computing over continuous fields.
 
 ---
 
-## I. The Double Trap of Modern Interactive Media & World Models
+## I. The Double Trap of Interactive Media
 
-Attempts to turn visual media into interactive worlds fail in one of two ways:
+Attempts to turn visual media into interactive worlds have historically fallen into one of two traps. The first is the clockwork puppet theater of traditional game engines. In that paradigm, a world is assembled by hand from inert geometric shells placed inside an empty coordinate void. Nothing moves or interacts by its own nature; every motion requires an explicit timeline, a rigid state table, or a brittle chain of conditional rules authored in advance. Space is treated as a dead receptacle, and the entities within it are passive records waiting to be manipulated from the outside.
 
-1. **The Clockwork Puppet Trap (Manual Game Engines):** Worlds are hand-authored from dead polygons inside an empty coordinate void. Motion requires explicit keyframe timelines, skeletal rigs, and boolean state machines (`if key_collected { open_door() }`).
-2. **The Hallucinatory Crutch Trap (Frame-by-Frame Neural World Models):** A diffusion or autoregressive video model predicts the next pixel buffer conditioned on a controller input. Because there is no persistent geometric ground, walls drift when you turn around, object identity evaporates across frames, latency is high, and causality collapses into statistical correlation.
+The second trap is the hallucinatory stream of frame-by-frame neural world models. When an autoregressive or diffusion network predicts the next image buffer directly from pixels and controller inputs, it trades rigid artifice for ontological amnesia. Because no persistent geometric ground exists beneath the pixels, corridors drift when the observer turns away, object identity dissolves across time, and causality collapses into statistical correlation. A model that hallucinates appearance frame by frame cannot sustain a world; it only dreams a plausible surface.
 
-A real world model requires a third foundation: **extracting the Implicate Order from video and text into a deterministic Clifford runtime.**
-
-A single static image does not contain enough information to define space or causality—it is a single frozen *explicate* slice ($t = t_0$) with zero temporal derivative $\partial_t \Psi$. Video and text, by contrast, encode **transitions**: camera parallax, occlusion, invariant HUD overlays, wall planes, actor trajectories, and semantic rules. Local AI tools (`llama.cpp` VLM and embedding models) do not *run* the world; they act at ingest as **diagrammatic transducers** that partner with the **Clifford Fourier Transform (CFT)** and **Active-GATr** to compile raw video and text into a playable $\mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$ world model.
+A genuine world compiler requires a third foundation. Rather than scripting dead objects by hand or dreaming pixels on the fly, it must extract the underlying generative order from observed motion and run that order forward through deterministic mathematical law. A single static image can never suffice for this task, because a frozen frame is merely an isolated slice of appearance stripped of transition and consequence. Moving imagery, by contrast, reveals how a world holds together across time. Through parallax, occlusion, recurring rhythms, and the mutual deflection of bodies, a temporal stream discloses the invariant laws that govern its space.
 
 ---
 
-## II. Ontological Foundations
+## II. Enfoldment and Unfoldment
 
-### 1. Enfoldment and Unfoldment (Bohm & Hiley)
-Following David Bohm and Basil Hiley (*The Undivided Universe*, 1993; Hiley & Callaghan, "The Clifford Algebra Approach to Quantum Mechanics", 2010), observed video frames are *explicate* projections of an underlying **Implicate Order**—an algebra of process governed by non-commutative transitions $M_{A \to B} = \Psi_B \Psi_A^{-1}$ and Active Information $\mathcal{Q}_{\text{Cl}}$.
-* **Enfold (`cc enfold`):** Compiles a folder of video and text into its structural and dynamical invariants (3D PGA geometry, CFT vitality kernels, semantic spinors, and $\mathcal{Q}_{\text{Cl}}$ coupling rules).
-* **Unfold (`cc unfold`):** Runs the compiled model forward at hundreds of hertz as an interactive, playable world where user input steers the ego `Motor` and Active Information guides the environment.
+To understand how an interactive world can be compiled from observation, `HolonEngine` draws upon the process physics of David Bohm and Basil Hiley. In *The Undivided Universe*, Bohm and Hiley proposed that the visible world of separate objects and events is the *explicate order*, a surface projection continuously generated from a deeper, unbroken *implicate order*. What appears to the eye as a sequence of discrete frames is not a chain of independent snapshots, but the visible trace of an underlying movement of relationships.
 
-### 2. The Holon: Algebraic Primitive of Process (Koestler & Hiley)
-Coined by Arthur Koestler, a **holon** is simultaneously an autonomous whole and a constituent part. In David Bohm and Basil Hiley's process physics, reality is not a collection of independent particles in a passive spacetime container, but an unbroken flow (*the holomovement*). Space is not a pre-existing stage; it emerges from algebraic relationships (*pregeometry*).
-
-Mathematically, a holon is realized as a localized algebraic structure within a Clifford algebra:
-* **Primitive Idempotents as Generalized Points:** Classical geometry assumes static, zero-dimensional points. In an algebraic pre-space, there are no fundamental points. Instead, primitive idempotents ($\epsilon^2 = \epsilon$) act as "generalized points." Because an idempotent reproduces itself under multiplication, it represents a self-sustaining, stable process—a whole. Through non-commutative multiplication within the algebra, idempotents generate spatial order—operating as relational parts.
-* **Minimal Left Ideals & The Clifford Density Element (CDE):** Standard quantum mechanics relies on an external Hilbert space. Hiley removes this external space, mapping all physical state directly inside the algebra using minimal left ideals $\mathcal{I} = \mathcal{C}\ell\,\epsilon$. The Clifford Density Element $\rho_c = \Psi \widetilde{\Psi}$ completely characterizes the process using internal algebraic invariants (directed spin, process density, Bohm momentum), unifying the localized entity with its undivided global context.
-* **The Algebraic Tower (Hierarchy of Wholeness):** Real Clifford algebras form a structural hierarchy ($\mathcal{C}\ell_{0,1} \to \mathcal{C}\ell_{3,0} \to \mathcal{C}\ell_{1,3}$, and here $\mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$). Higher-order algebras naturally enfold lower ones without destroying them, mirroring how complex holons encapsulate and build upon simpler ones throughout the implicate order.
-
-**Why this primitive matters:** Modern engines and world models treat entities as passive collections of coordinates and meshes placed inside an external Cartesian void. In `HolonEngine`, every entity—player, autonomous actor, wall, or projectile—is an algebraic holon. It carries its own stability conditions, internal state idempotents, and boundary blades. Space, collision, and behavior are not external checks; they emerge intrinsically from algebraic incidence and the gradient of Active Information ($\mathcal{Q}_{\text{Cl}}$).
-
-### 3. The Diagram vs. The Cliché (Disciplining Local AI)
-Gilles Deleuze observed that raw imagery is cluttered with statistical clichés, whereas a *diagram* extracts the underlying intensive forces and relations.
-* **The Rule of Non-Crutch AI:** Generative models never sit inside the frame-to-frame runtime loop. If a neural network hallucinates the next frame of a corridor, the world has no ontology.
-* **AI + Spectral Math as Ingest Compiler:**
-  * **`llama.cpp` VLM (`llama-mtmd-cli` / `llama-server`):** Samples video keyframes to label components (`wall`, `door`, `enemy`, `hud_panel`, `weapon`), bounding boxes, visual descriptions, and state transitions.
-  * **`llama.cpp` Embeddings (`llama-embedding`):** Maps component descriptions and text rules into a semantic wording space, whose Gram matrix $S_{ij} = \langle \hat{e}_i, \hat{e}_j \rangle$ projects into Clifford spinor phases.
-  * **Clifford Fourier Transform (CFT):** Separates camera ego-motion from world geometry and extracts compact spatiotemporal vitality kernels $\hat{K}(\mathbf{k}, \omega)$ for animated sprites and textures.
-  * **Active-GATr:** Discovers the geometric incidence and behavioral laws connecting HUD, 3D space, player, and autonomous actors.
+Within this ontology, compilation and execution become two phases of a single movement: enfoldment and unfoldment. During enfoldment, the compiler observes a stream of visual experience and distills its transient frames back into their generative invariants: the persistent boundaries of the environment, the characteristic rhythms of moving bodies, and the relational laws that bind them. During unfoldment, that compressed implicate structure is released into time as an interactive world. The player no longer steps through pre-recorded frames or queries a neural network; instead, human input participates directly in a continuous dynamical system that unfolds at high frequency from its own internal harmony.
 
 ---
 
-## III. Mathematical Architecture: CFT + Active-GATr in $\mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$
+## III. The Holon and Algebraic Pregeometry
 
-To compile a video (such as *Wolfenstein 3D* gameplay) plus text notes into a playable engine model, every extracted component becomes a **Holon**:
+The fundamental unit of this implicate order is the *holon*, a term coined by Arthur Koestler to describe that which is simultaneously a self-sustaining whole and a constituent part of a larger totality. In classical mechanics and conventional software design, wholes are built from bottom-up atoms that possess location without internal life. In process ontology, there are no isolated atoms sitting in an external container. Every entity is a stable pattern of activity within an undivided medium, known in Bohm's terminology as the *holomovement*.
 
-$$\mathcal{H}_i = \left(\underbrace{B_i \in \mathbb{G}_{3,0,1}}_{\text{3D PGA Blade + Motor}},\; \underbrace{\psi_i = R_i e^{\theta_i e_{12}} \in (\mathbb{G}_{2,0}^+)^K}_{\text{Semantic Spinor}},\; \underbrace{\hat{K}_i(\mathbf{k}, \omega)}_{\text{CFT Spectral Kernel}}\right)$$
+Basil Hiley demonstrated that when process takes precedence over static substance, space itself ceases to be a pre-existing stage. Instead, spatial order emerges from the non-commutative relationships among self-sustaining algebraic processes, a principle Hiley called *pregeometry*. A localized process maintains its own identity by reproducing itself through time, acting as an autonomous whole, while its interactions with neighboring processes generate incidence, reflection, and extension, allowing it to function as a relational part. Complex entities naturally encapsulate simpler ones in an ascending hierarchy of wholeness without erasing the integrity of what they enfold.
 
-### 1. Spatiotemporal Decomposition via Clifford Fourier Transform (CFT)
-A naive global 2D FFT across a perspective viewport fails because perspective projection ($y_{\text{screen}} \propto H / z$) chirps spatial frequencies from the horizon to the screen edge, and actor translation smears sprite spectra. Instead, `cc enfold` applies **projectively rectified CFT** in four stages:
-
-1. **Screen-Locked HUD Isolation (Temporal Phase Variance):**
-   Rows and regions whose pixel phase remains invariant across horizontal camera pans ($\partial_t \Psi \approx 0$ while global yaw $\Omega(t) \neq 0$) are partitioned first as 2D viewport-locked planes (status bar, weapon overlay).
-2. **Horizon-Relative Column CFT (3D Depth & Wall Plane Reconstruction):**
-   Inside the 3D viewport, vertical columns $x \in [0, W)$ are analyzed relative to the horizon line $y_h$. The symmetric vertical span $h(x)$ of coherent wall texture gives inverse projective depth $d(x) = 1/z(x) \propto h(x)$. Piecewise linear segments of $d(x)$ across adjacent columns directly reconstruct 3D PGA wall and door `Plane`s ($\Pi_k$) and vertical corner `Line`s ($L_{k,k+1} = \Pi_k \wedge \Pi_{k+1}$).
-3. **Ego-Motion Odometry + Manhattan/Periodicity Locking:**
-   Floor-projected CFT phase correlation estimates incremental camera rotors $\Delta M_{\text{ego}}(t) \in \text{Spin}(3,0,1)$. Active-GATr regularizes wall normals onto orthogonal clusters ($\langle n_i, n_j \rangle \in \{0, \pm 1\}$) and quantizes wall lengths to the fundamental tile period $\lambda_{\text{tile}}$ of the wall's horizontal CFT spectrum, eliminating odometry drift.
-4. **Canonical-Frame Actor CFT (Vitality Kernels & State Idempotents):**
-   Independent moving entities (guards, projectiles) have their foot depth $z_i(t)$ estimated from intersection with $\Pi_{\text{floor}}$. Each actor crop is unwarped into a canonical $64 \times 64$ rest frame before computing its 2D+t CFT kernel $\hat{K}_i(\mathbf{k}, \omega)$—cleanly separating spatial silhouette/albedo ($\mathbf{k}$) from periodic walk/attack harmonics ($\omega$). Discrete behavioral states (patrol, alert, attack, pain, dead; door closed/sliding/open) are represented as **Clifford Primitive Idempotents** ($\epsilon_s^2 = \epsilon_s$) connected by transition operators $T_{s \to s'} = \epsilon_{s'} M \epsilon_s$.
-
-### 2. Relational Structure Discovery via Active-GATr
-Standard Geometric Algebra Transformers (Brehmer et al., "Geometric Clifford Algebra Networks", 2023) operate on $\mathbb{G}_{3,0,1}$ multivectors using $\text{Pin}(3,0,1)$-equivariant linear layers and the geometric product. **Active-GATr** extends this to bind extracted video/text holons across time:
-
-$$\mathcal{A}_{ij} = \text{Softmax}_j \Big( \alpha \langle q_i, k_j \rangle_{\mathbb{G}_{3,0,1}} + \beta \langle \psi_i, \psi_j \rangle_{\mathbb{G}_{2,0}} + \gamma \langle B_i \vee B_j \rangle_0 + \delta \langle \mathcal{Q}_{\text{Cl}}(i), \mathcal{Q}_{\text{Cl}}(j) \rangle \Big)$$
-
-* **Term 1 ($\langle q_i, k_j \rangle_{\mathbb{G}_{3,0,1}}$):** Orientation and plane-normal alignment (grouping collinear wall segments and orthogonal corridor turns).
-* **Term 2 ($\langle \psi_i, \psi_j \rangle_{\mathbb{G}_{2,0}}$):** Wording-space spinor coherence from `llama-embedding` (linking a text rule *"guards shoot when sighting the player"* or *"doors slide open on use"* to the corresponding visual holons).
-* **Term 3 ($\langle B_i \vee B_j \rangle_0$):** Projective incidence via the `Antiwedge` (join)—computing line-of-sight rays $L_{\text{los}} = P_{\text{player}} \vee P_{\text{enemy}}$, wall occlusion $L_{\text{los}} \wedge \Pi_{\text{wall}}$, and door hinge axes.
-* **Term 4 ($\langle \mathcal{Q}_{\text{Cl}}(i), \mathcal{Q}_{\text{Cl}}(j) \rangle$):** Active Information coupling—inferring which entities act as attractors or repellers in the floorplan field.
-
-### 3. Bohm-Hiley Active Information at Runtime ($\mathcal{Q}_{\text{Cl}}$)
-During `cc unfold`, the reconstructed 2D/3D floorplan carries the Clifford field $\Psi(x, t) = R(x, t)\,\mathcal{U}(x, t)$ governed by the **Clifford Quantum Potential**:
-
-$$\mathcal{Q}_{\text{Cl}} = -(\nabla^2 \Psi)\Psi^{-1} = \underbrace{-\frac{\nabla^2 R}{R}}_{\text{Scalar Guidance } \langle \mathcal{Q}_{\text{Cl}} \rangle_0} - \underbrace{\left(2(\nabla \ln R)\mathcal{U}\nabla\widetilde{\mathcal{U}} + (\nabla^2 \mathcal{U})\widetilde{\mathcal{U}}\right)}_{\text{Bivector Spin-Torque } \langle \mathcal{Q}_{\text{Cl}} \rangle_2}$$
-
-* **Zero-A* Enemy Navigation:** The player emits a global distance-cone ground (`docs/discovery_page_ground.md`), while walls and closed doors inject high-impedance repeller ridges. Enemies follow $-\nabla \langle \mathcal{Q}_{\text{Cl}} \rangle_0$ and steer their PGA `Motor`s via $\langle \mathcal{Q}_{\text{Cl}} \rangle_2$, naturally rounding corridor corners and flanking obstacles without navmeshes.
-* **Soliton Projectiles & CFT Playback:** Projectiles and shockwaves propagate through the split-step CFT lattice as self-focusing solitons, while actor sprites synthesise their animation frames directly from their enfolded CFT kernels $\hat{K}_i(\mathbf{k}, \omega)$ conditioned on relative viewing angle.
+In `HolonEngine`, every participant in a world, whether a guided avatar, an autonomous creature, a reactive boundary, or a fleeting impulse in the medium, is treated as a holon. An entity carries its own internal posture, harmonic vitality, and boundary conditions as a unified process. Collision, support, and state change are not external bookkeeping routines imposed by a master script; they arise directly when two processes meet within the shared geometry of the world.
 
 ---
 
-## IV. Two-Stage Benchmark: 2D (*Super Mario Bros. 3*) $\to$ 3D (*Wolfenstein 3D*)
+## IV. The Diagram Over the Cliché
 
-In $\mathbb{G}_{3,0,1}$, 2D side-scrollers and 3D corridor worlds share one mathematical representation, distinguished only by the camera `Motor` subgroup detected from CFT optical-flow divergence ($\nabla \cdot \mathbf{v}_{\text{flow}}$):
+In his study of painting, *Francis Bacon: The Logic of Sensation*, Gilles Deleuze drew a sharp distinction between the *cliché* and the *diagram*. Raw figurative imagery is saturated with clichés, the habitual expectations and statistical redundancies that clutter perception. The task of the artist, and by extension the world compiler, is not to reproduce figurative clichés, but to isolate the *diagram*: the austere map of intensive forces, tensions, and boundaries that gives a scene its necessity.
 
-1. **`example_input2d/` — *Super Mario Bros. 3* World 1-1 (`Ortho2D`, $\nabla \cdot \mathbf{v}_{\text{flow}} \approx 0$):**
-   * **Camera & Level Atlas:** CFT cross-power spectrum recovers sub-pixel camera scroll $(X_{\text{cam}}(t), Y_{\text{cam}}(t))$. Taking the temporal median in world coordinates removes transient sprites and stitches a ghost-free level panorama.
-   * **Tile Boundaries & One-Way Platforms:** Bragg peaks in the atlas CFT lock the $16 \times 16$ tile lattice. Observed velocity arrests classify solid 4-sided tiles vs. one-way top-surface PGA `Line`s (pastel shadow-boxes).
-   * **Actors & Active Information:** Residual motion isolates Mario, Goombas, Koopas, and `?` blocks into canonical $32 \times 32$ 2D+t CFT vitality kernels and state idempotents ($\epsilon_{\text{small}} \leftrightarrow \epsilon_{\text{super}}$, $\epsilon_{\text{walk}} \to \epsilon_{\text{shell}}$).
-
-2. **`example_input3d/` — *Wolfenstein 3D* Episode 1 Floor 1 (`Perspective3D`, $\nabla \cdot \mathbf{v}_{\text{flow}} \neq 0$):**
-
-| Component Class | How `cc enfold` Extracts It (VLM + Embeddings + CFT + GATr) | How `cc unfold` Runs It |
-| :--- | :--- | :--- |
-| **HUD Layout** | CFT detects zero ego-motion parallax on the bottom status bar and centered weapon anchor; VLM labels `health`, `ammo`, `face`, `weapon`. | Pinned to the 2D screen plane; state variables update via Active-GATr couplings when projectiles or pickups intersect the player `Point`. |
-| **Player Movement** | Optical CFT phase flow extracts forward translation speed and yaw angular velocity $M_{\text{ego}}(t) \in \text{Spin}(3,0,1)$. | User keyboard/CLI input drives $M_{\text{player}}$; wall `Plane` impedance prevents clipping via $\mathcal{Q}_{\text{Cl}}$ repulsion. |
-| **3D Walls & Doors** | Horizon-symmetric vertical spans $h(x) \to 1/z(x)$ + log-odds Manhattan occupancy reconstruct orthogonal 3D PGA `Plane`s ($\Pi_{\text{wall}}, \Pi_{\text{door}}$) and $64 \times 64$ texture tiles. | Rendered via fast PGA ray-plane intersection (`Line::vee(ray, plane)`); doors translate along their PGA `Line` rail when triggered. |
-| **Enemies & Props** | VLM boxes + independent CFT motion isolate guards; canonical $64 \times 64$ 2D+t CFT extracts walk/attack spectral loops; GATr links enemy pursuit to player line-of-sight. | Enemies navigate the corridor's $\mathcal{Q}_{\text{Cl}}$ potential field toward the player and fire along $P_{\text{enemy}} \vee P_{\text{player}}$. |
+This distinction governs the role of artificial intelligence and spectral analysis in `HolonEngine`. When a generative neural model is placed inside the runtime loop of an interactive experience, it remains trapped in the realm of the cliché, endlessly blending statistical memories of past frames to guess the next one. By restricting inference and spectral decomposition strictly to the enfoldment phase, the compiler strips away transient noise and isolates the diagram of the world. Once those invariant forces and boundaries have been extracted, the runtime needs no neural crutch. The diagram stands on its own.
 
 ---
 
-## V. First Principles Summary
+## V. Guidance by Active Information
 
-1. **Video + Text In, Playable Model Out:** Static images lack temporal transition structure; video provides the CFT motion invariants and text provides the semantic wording-space spinors.
-2. **AI Compiles, Math Runs:** `llama.cpp` (VLM + embeddings) runs only during `cc enfold`. `cc unfold` is a pure Rust Clifford runtime running at hundreds of hertz.
-3. **Geometry Is Explicit:** 3D space is modeled as exact $\mathbb{G}_{3,0,1}$ blades (`Plane` walls, `Line` rays/hinges, `Point` actors, `Motor` poses), never blurry neural latent tensors.
-4. **Guidance by Active Information:** Autonomous behaviors emerge from $\mathcal{Q}_{\text{Cl}} = -(\nabla^2 \Psi)\Psi^{-1}$ over the reconstructed space and semantic phase alignment.
-5. **Holons Over Objects:** Entities are self-contained algebraic processes ($\mathcal{C}\ell\,\epsilon$) generating space and interaction, rather than passive data records situated in an external coordinate void.
+If a compiled world contains neither hand-authored pathfinding graphs nor runtime neural inference, what guides the autonomous entities within it? Bohm and Hiley answered this question through the concept of *Active Information*. In their formulation of quantum and process dynamics, a wave field does not push a body through brute mechanical force; rather, the mathematical form of the whole environment informs the directed energy of the entity from within. Because this potential depends on the shape and curvature of the field rather than its raw magnitude, even a subtle structural contour carries decisive meaning across the space.
+
+When an implicate world unfolds, its boundaries, open passages, and active excitations continuously shape a global field of Active Information. Obstacles form ridges of impedance, while open corridors and points of interest carve smooth valleys of guidance. Autonomous holons sense the local geometry of this field and steer their internal posture in response, gliding around barriers and flowing through passages without consulting a navigation mesh or executing search trees. Agency and movement emerge as a natural dialogue between the localized holon and the undivided landscape it inhabits.

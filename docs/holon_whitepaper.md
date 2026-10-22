@@ -8,11 +8,13 @@
 
 ## 1. Foundational Thesis: From Atomism to the Implicate Order
 
- interactive world engines have historically split into two flawed paradigms:
+Interactive world engines have historically split into two flawed paradigms:
 1. **Atomistic State Machines (Traditional Engines):** Sealed structs sit inside an inert coordinate void, governed by hand-coded boolean flags and game-specific branching (`if is_pacman { eat_dot() } else if is_mario { stomp_goomba() }`).
 2. **Frame-by-Frame Neural Hallucination (Autoregressive Video Models):** Pixel buffers are predicted statistically per frame without persistent geometry, conservation laws, or object identity.
 
-`HolonEngine` implements a third architecture grounded in **David Bohm and Basil Hiley's Implicate Order** (*The Undivided Universe*, 1993; Hiley & Callaghan, "The Clifford Algebra Approach to Quantum Mechanics", 2010) and **Projective Geometric Algebra ($\mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$)**:
+A single static image cannot define space or causality because it is a frozen *explicate* slice ($t = t_0$) with zero temporal derivative ($\partial_t \Psi = 0$). Gameplay video, by contrast, encodes **non-commutative process transitions** $M_{A \to B} = \Psi_B \Psi_A^{-1}$ across time: camera parallax, occlusion, invariant HUD overlays, boundary incidence, and actor harmonics.
+
+`HolonEngine` implements a third architecture grounded in **David Bohm and Basil Hiley's Implicate Order** (*The Undivided Universe*, 1993; Hiley & Callaghan, "The Clifford Algebra Approach to Quantum Mechanics", 2010) and an **Algebraic Tower of Clifford Algebras** ($\mathcal{C}\ell_{0,1} \to \mathcal{C}\ell_{2,0} \to \mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$), where higher-order algebras naturally enfold lower ones without destroying them:
 * **Enfoldment (`cc enfold`):** Compiles raw gameplay video into an invariant **Implicate World Model (`.cc`)**—extracting camera `Motor` odometry, ghost-free world panoramas, oriented PGA boundary blades, chromatic/semantic spinor signatures, and canonical actor processes without game-specific rules.
 * **Unfoldment (`cc unfold`):** Runs the compiled `.cc` model forward at thousands of hertz as a unified, zero-AI Clifford dynamical system where every entity is an algebraic process coupled to the surrounding spatial medium.
 
@@ -20,8 +22,14 @@
 
 ## 2. Core Algebraic Abstractions (`cc_math`)
 
-### 2.1 Minimal Left Ideals & The Clifford Density Element (`CliffordDensityElement`)
-Following Hiley & Callaghan (2010, §2.1–2.5), `HolonEngine` dispenses with external state vectors and ad-hoc entity flags. Every world entity (player, autonomous actor, interactive block, collectible token) is an **Algebraic Holon** inhabiting a minimal left ideal $\mathcal{I}_i = \mathcal{C}\ell\,\epsilon_i$:
+### 2.1 Minimal Left Ideals, Pregeometry, & The Clifford Density Element (`CliffordDensityElement`)
+In classical geometry, space is a pre-existing container populated by zero-dimensional points. In Bohm and Hiley's algebraic *pregeometry* (Hiley & Callaghan, 2010, §2.1–2.5), there are no fundamental points in an external void; instead, **primitive idempotents** ($\epsilon^2 = \epsilon$) act as "generalized points"—self-sustaining processes that reproduce themselves under multiplication while generating spatial incidence through non-commutative relations.
+
+`HolonEngine` dispenses with external state vectors and ad-hoc entity flags. Every compiled world component (player, autonomous actor, interactive boundary, collectible token) is an **Algebraic Holon** represented as the unified tuple:
+
+$$\mathcal{H}_i = \left(\underbrace{B_i \in \mathbb{G}_{3,0,1}}_{\text{PGA Boundary Blade + Motor}},\; \underbrace{\Phi_{L,i} \in \mathcal{C}\ell\,\epsilon_{i,s}}_{\text{Minimal Left Ideal State}},\; \underbrace{\psi_i = R_i e^{\theta_i e_{12}} \in (\mathbb{G}_{2,0}^+)^K}_{\text{Intrinsic Spinor Signature}},\; \underbrace{\hat{K}_i(\mathbf{k}, \omega)}_{\text{2D+t CFT Vitality Kernel}}\right)$$
+
+Each holon's active process state inhabits a minimal left ideal $\mathcal{I}_i = \mathcal{C}\ell\,\epsilon_i$:
 
 $$\Phi_{L,i}(r, t) = \phi_{L,i}(r, t)\,\epsilon_{i,s} = R_i(r, t)\,U_i(r, t)\,\epsilon_{i,s}$$
 
@@ -178,7 +186,7 @@ $$\mathcal{Q}_{\text{Cl}} = -(\nabla^2 \Psi)\Psi^{-1} = \underbrace{-\frac{\nabl
 ### 5.1 Why a 2D World Model Must Not Assume a Tile Grid
 Many 2D games—vector space arenas (*Asteroids*, *Lunar Lander*, *Geometry Wars*), hand-painted continuous worlds (*Braid*, *Rayman*, *Limbo*), physics sandboxes (*Worms*), and freeform arcade tables (*Pinball*, *Pong*)—have **no discrete tile grid**. Even in games that use tiles (*Super Mario Bros. 3*, *Pac-Man*), treating `kinds: Vec<TileKind>` as the primary world ontology introduces artificial quantization, fixed cell-size assumptions, and axis-aligned bias.
 
-In accordance with `docs/holon_philosophy.md` (§1.1, §4.2), the fundamental representation of a world in `HolonEngine` is **continuous**:
+In accordance with `docs/holon_philosophy.md` (§II–§III), the fundamental representation of a world in `HolonEngine` is **continuous**:
 
 1. **Continuous PGA Boundary Blades ($B_k \in \mathbb{G}_{3,0,1}$):**
    Static and semi-permeable world structures are stored in continuous world coordinates (`ModelManifest::solids`, `ModelManifest::platforms`, `ModelManifest::collectibles`, and oriented PGA lines `OrientedLine2`):
@@ -191,7 +199,7 @@ In accordance with `docs/holon_philosophy.md` (§1.1, §4.2), the fundamental re
    The Clifford Quantum Potential $\mathcal{Q}_{\text{Cl}} = -(\nabla^2 R)/R$ is constructed directly from continuous world-space geometry (`solids`, `platforms`, `collectibles`) over $[0, W_{\text{world}}] \times [0, H_{\text{world}}]$—requiring **zero tile metadata** (`tile = 0, cols = 0, rows = 0, kinds = []` is a valid, fully functional `.cc` model, verified by `model2d::tests::tile_free_continuous_world_queries_and_qfield`).
 
 3. **Bragg Lattice Snapping as an Optional Spectral Regularizer:**
-   When the 2D CFT of the temporal-mode world atlas $\hat{A}(k_x, k_y)$ exhibits sharp Bragg peaks at $(k_{\text{tile},x}, k_{\text{tile},y}) = (2\pi/\lambda_x, 2\pi/\lambda_y)$ with peak-to-median spectral energy exceeding threshold $\tau_{\text{Bragg}}$, Active-GATr applies the Manhattan/lattice regularizer (Term 1 of $\mathcal{E}_{\text{GATr}}$) to snap noisy pixel contours onto the discovered period $(\lambda_x, \lambda_y)$. When no Bragg peak is present (continuous/non-tile 2D games), $\tau_{\text{Bragg}}$ is not met and boundaries remain unquantized continuous PGA contours in $\mathbb{G}_{3,0,1}$.
+   When the 2D CFT of the temporal-mode world atlas $\hat{A}(k_x, k_y)$ exhibits sharp Bragg peaks at $(k_{\text{tile},x}, k_{\text{tile},y}) = (2\pi/\lambda_x, 2\pi/\lambda_y)$ with peak-to-median spectral energy exceeding threshold $\tau_{\text{Bragg}}$, a Manhattan/lattice spectral regularizer snaps noisy pixel contours onto the discovered period $(\lambda_x, \lambda_y)$. When no Bragg peak is present (continuous/non-tile 2D games), $\tau_{\text{Bragg}}$ is not met and boundaries remain unquantized continuous PGA contours in $\mathbb{G}_{3,0,1}$.
 
 ### 5.2 Empirical Systems Laws Discovered from Benchmark Unfoldment
 
@@ -222,5 +230,43 @@ In accordance with `docs/holon_philosophy.md` (§1.1, §4.2), the fundamental re
 7. **Multi-Frame Stride Regression vs. Integer Quantization Bias:**
    * **Phenomenon:** Evaluating second-order acceleration differences $\Delta^2 y_t = y(t+1) - 2y(t) + y(t-1)$ at single-frame steps ($\Delta t = 1$) on integer pixel bounding boxes quantizes accelerations to integers $\{0, \pm 1, \pm 2\}$, biasing positive-filtered medians upward by $> 40\%$.
    * **Law:** Field acceleration ($\mathbf{a}_{\text{env}}$) and cruise velocities must be regressed over a multi-frame stride ($\Delta t \ge 4,\; \Delta t^2 = 16$), where sub-pixel accelerations accumulate into multi-pixel displacements that dominate integer rounding noise.
+
+---
+
+## 6. Bonus: Future Work — Extending Implicate Compilation to 3D Worlds
+
+In $\mathbb{G}_{3,0,1}$, 2D orthographic worlds and 3D perspective corridor worlds share the same projective geometric algebra, distinguished only by the camera `Motor` subgroup detected from CFT optical-flow divergence ($\nabla \cdot \mathbf{v}_{\text{flow}}$):
+* **Orthographic 2D (`Ortho2D`, $\nabla \cdot \mathbf{v}_{\text{flow}} \approx 0$):** Pure translational camera motor (`pga::integrate_2d_camera`):
+  $$M_{\text{ego}}(t) = \exp\left(-\frac{1}{2}(v_x e_{01} + v_y e_{02})\Delta t\right)$$
+* **Perspective 3D (`Perspective3D`, $\nabla \cdot \mathbf{v}_{\text{flow}} \neq 0$, e.g. *Wolfenstein 3D*):** Forward translation coupled with horizontal yaw rotation (`pga::integrate_3d_ego`):
+  $$M_{\text{ego}}(t) = \exp\left(\frac{1}{2}\Omega \Delta t\, e_{12}\right)\exp\left(-\frac{1}{2}v_{\text{fwd}} \Delta t\, e_{01}\right) \in \text{Spin}(3,0,1)$$
+
+### 6.1 Four-Stage Projectively Rectified CFT for 3D Enfoldment
+A naive global 2D FFT across a perspective viewport fails because perspective projection ($y_{\text{screen}} \propto H / z$) chirps spatial frequencies from the horizon to the screen edge, and actor translation smears sprite spectra. Extending `cc enfold` to 3D corridor worlds replaces global 2D FFT registration with a four-stage **projectively rectified CFT**:
+
+1. **Screen-Locked HUD & Weapon Overlay Isolation (Temporal Phase Variance):**
+   Rows and foreground regions whose pixel phase remains invariant across horizontal camera pans ($\partial_t \Psi \approx 0$ while global yaw $\Omega(t) \neq 0$) are partitioned first as 2D viewport-locked planes (bottom status bar and centered weapon overlay).
+2. **Horizon-Relative Column CFT (3D Depth & Wall Plane Reconstruction):**
+   Inside the 3D viewport, vertical columns $x \in [0, W)$ are analyzed relative to the horizon line $y_h$. The symmetric vertical span $h(x)$ of coherent wall texture gives inverse projective depth:
+   $$d(x) = \frac{1}{z(x)} \propto h(x)$$
+   Piecewise-linear segments of $d(x)$ across adjacent columns directly reconstruct 3D PGA wall and door `Plane`s ($\Pi_k \in \mathbb{G}_{3,0,1}$) and vertical corner `Line`s via the outer product ($L_{k,k+1} = \Pi_k \wedge \Pi_{k+1}$).
+3. **Ego-Motion Odometry & Manhattan/Periodicity Locking:**
+   Floor-projected CFT phase correlation estimates incremental camera rotors $\Delta M_{\text{ego}}(t) \in \text{Spin}(3,0,1)$. Wall normals are regularized onto orthogonal clusters ($\langle \hat{\mathbf{n}}_i, \hat{\mathbf{n}}_j \rangle \in \{0, \pm 1\}$ via `pga::snap_manhattan_plane`) and wall lengths are quantized to the fundamental tile period $\lambda_{\text{tile}}$ of the wall's horizontal CFT spectrum inside a log-odds occupancy grid, eliminating odometry drift.
+4. **Canonical-Frame 3D Actor CFT (Vitality Kernels & State Idempotents):**
+   Independent moving entities (guards, projectiles) have their foot depth $z_i(t)$ estimated from projective intersection with $\Pi_{\text{floor}}$. Each actor crop is unwarped into a canonical $64 \times 64$ rest frame before computing its 2D+t CFT kernel $\hat{K}_i(\mathbf{k}, \omega)$—separating spatial silhouette/albedo ($\mathbf{k}$) from periodic walk/attack harmonics ($\omega$) conditioned on relative viewing angle. Discrete behavioral states (patrol, alert, attack, pain, dead; door closed/sliding/open) map to primitive idempotents ($\epsilon_s^2 = \epsilon_s$) connected by transition operators $T_{s \to s'} = \epsilon_{s'} M \epsilon_s$.
+
+### 6.2 3D Projective Incidence, Raycasting, & Active Information Navigation
+The core 3D geometric primitives are already verified in `crates/cc_math/src/pga.rs` (`ray_hit_plane`, `ray_hit_plane_pga`, `plane_through_point`, `snap_manhattan_plane`, `integrate_3d_ego`). In a full 3D `cc unfold` runtime, interaction and rendering operate directly in $\mathbb{G}_{3,0,1}$:
+
+* **PGA Ray-Plane Intersection & Line-of-Sight:** Viewport columns and weapon rays intersect wall and door `Plane`s via the PGA regressive product (`Line::antiwedge(ray, plane)`). Actor line-of-sight is evaluated via the join $L_{\text{los}} = P_{\text{player}} \vee P_{\text{enemy}}$ and tested for wall occlusion via $L_{\text{los}} \wedge \Pi_{\text{wall}}$, while sliding doors translate along their PGA `Line` hinge/rail axes.
+* **Zero-A* 3D Corridor Navigation:** Over the reconstructed 3D floorplan, the player emits a distance-cone ground while walls and closed doors inject high-impedance repeller ridges into $\mathcal{Q}_{\text{Cl}} = -(\nabla^2 \Psi)\Psi^{-1}$. Autonomous actors follow $-\nabla \langle \mathcal{Q}_{\text{Cl}} \rangle_0$ and steer their 3D PGA `Motor`s via bivector spin-torque $\langle \mathcal{Q}_{\text{Cl}} \rangle_2$, rounding corridor corners and flanking obstacles without navmeshes.
+
+| 3D Component Class | How `cc enfold` Extracts It (CFT + PGA + Spinors) | How `cc unfold` Runs It |
+| :--- | :--- | :--- |
+| **HUD & Weapon Overlay** | CFT detects zero ego-motion parallax on the bottom status bar and centered weapon anchor during camera yaw $\Omega(t) \neq 0$. | Pinned to the 2D screen plane; state variables update via incidence couplings when projectiles or pickups intersect the player `Point`. |
+| **Player Ego Movement** | Optical CFT phase flow extracts forward translation speed and yaw angular velocity $M_{\text{ego}}(t) \in \text{Spin}(3,0,1)$. | User input drives $M_{\text{player}}$ (`integrate_3d_ego`); wall `Plane` impedance prevents clipping via $\mathcal{Q}_{\text{Cl}}$ repulsion. |
+| **3D Walls & Doors** | Horizon-symmetric vertical spans $h(x) \to 1/z(x)$ + log-odds Manhattan occupancy reconstruct orthogonal 3D PGA `Plane`s ($\Pi_{\text{wall}}, \Pi_{\text{door}}$) and $64 \times 64$ rectified texture tiles. | Rendered via fast PGA ray-plane intersection (`pga::ray_hit_plane`); doors translate along their PGA `Line` rail when triggered. |
+| **Enemies & Props** | Independent CFT motion + depth discontinuity isolate billboard actors; canonical $64 \times 64$ 2D+t CFT extracts walk/attack spectral loops. | Enemies navigate the corridor's $\mathcal{Q}_{\text{Cl}}$ potential field toward the player and fire along $P_{\text{enemy}} \vee P_{\text{player}}$. |
+
 
 
