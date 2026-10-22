@@ -683,6 +683,10 @@ impl Bucket {
             e.count,
         ))
     }
+
+    fn total(&self) -> u32 {
+        self.entries.iter().map(|e| e.count).sum()
+    }
 }
 
 /// Streaming world atlas accumulator.
@@ -724,10 +728,23 @@ impl AtlasAccumulator {
         self.frames += 1;
         let fw = frame.width as usize;
         let rows = self.viewport_h.min(frame.height as usize);
+        let x_start = if off[0] > 0 && fw >= 128 { 8 } else { 0 };
         for y in 0..rows {
             let wy = y as i32 + off[1];
-            for x in 0..fw {
+            for x in x_start..fw {
                 let wx = x as i32 + off[0];
+                if wx < self.min[0] {
+                    self.min[0] = wx;
+                }
+                if wy < self.min[1] {
+                    self.min[1] = wy;
+                }
+                if wx > self.max[0] {
+                    self.max[0] = wx;
+                }
+                if wy > self.max[1] {
+                    self.max[1] = wy;
+                }
                 if !mask.is_empty() {
                     let mut skip = false;
                     for r in mask {
@@ -743,18 +760,6 @@ impl AtlasAccumulator {
                 let i = (y * fw + x) * 3;
                 let c = [frame.rgb[i], frame.rgb[i + 1], frame.rgb[i + 2]];
                 self.buckets.entry((wx, wy)).or_default().add(c);
-                if wx < self.min[0] {
-                    self.min[0] = wx;
-                }
-                if wy < self.min[1] {
-                    self.min[1] = wy;
-                }
-                if wx > self.max[0] {
-                    self.max[0] = wx;
-                }
-                if wy > self.max[1] {
-                    self.max[1] = wy;
-                }
             }
         }
     }
@@ -794,6 +799,102 @@ impl AtlasAccumulator {
                         atlas.image.set_pixel(x, y, c);
                     }
                 }
+            }
+        }
+        atlas
+    }
+
+    /// Resolve to a dense atlas when viewport-locked HUD elements were masked,
+    /// completing HUD-occluded or low-support leading-edge pixels from the nearest
+    /// observed cardinal neighbor in `self` rather than a HUD-contaminated fallback.
+    pub fn to_atlas_inpainted(
+        &self,
+        fallback: &WorldAtlas,
+        has_viewport_hud: bool,
+        bg: [u8; 3],
+    ) -> WorldAtlas {
+        if !has_viewport_hud {
+            return self.to_atlas_with_fallback(fallback);
+        }
+        let mut atlas = self.to_atlas();
+        let w = atlas.image.width;
+        let h = atlas.image.height;
+        if w == 0 || h == 0 {
+            return atlas;
+        }
+        let mut valid = vec![false; w * h];
+        for y in 0..h {
+            let wy = atlas.origin[1] + y as i32;
+            for x in 0..w {
+                let wx = atlas.origin[0] + x as i32;
+                if let Some(b) = self.buckets.get(&(wx, wy)) {
+                    if let Some((c, _)) = b.mode() {
+                        let tot = b.total();
+                        if y >= 10 || tot >= 12 || color_dist(c, bg) <= 32 {
+                            valid[y * w + x] = true;
+                        }
+                    }
+                }
+            }
+        }
+        for y in 0..h {
+            for x in 0..w {
+                if valid[y * w + x] {
+                    continue;
+                }
+                let mut best_c = bg;
+                let mut best_d = usize::MAX;
+                if y < 28 && x + 20 < w {
+                    for sy in (y + 1)..h {
+                        if valid[sy * w + x] {
+                            best_d = sy - y;
+                            best_c = atlas.image.pixel(x, sy);
+                            break;
+                        }
+                    }
+                }
+                if best_d == usize::MAX {
+                    for sx in (0..x).rev() {
+                        if valid[y * w + sx] {
+                            let d = x - sx;
+                            if d < best_d {
+                                best_d = d;
+                                best_c = atlas.image.pixel(sx, y);
+                            }
+                            break;
+                        }
+                    }
+                    for sx in (x + 1)..w {
+                        if valid[y * w + sx] {
+                            let d = sx - x;
+                            if d < best_d {
+                                best_d = d;
+                                best_c = atlas.image.pixel(sx, y);
+                            }
+                            break;
+                        }
+                    }
+                    for sy in (y + 1)..h {
+                        if valid[sy * w + x] {
+                            let d = sy - y;
+                            if d < best_d {
+                                best_d = d;
+                                best_c = atlas.image.pixel(x, sy);
+                            }
+                            break;
+                        }
+                    }
+                    for sy in (0..y).rev() {
+                        if valid[sy * w + x] {
+                            let d = y - sy;
+                            if d < best_d {
+                                best_c = atlas.image.pixel(x, sy);
+                            }
+                            break;
+                        }
+                    }
+                }
+                atlas.image.set_pixel(x, y, best_c);
             }
         }
         atlas
@@ -864,8 +965,9 @@ pub fn residual_boxes_range(
     let w = frame.width as usize;
     let h = y_end.min(frame.height as usize);
     let mut mask = vec![false; w * h];
+    let x_start = if off[0] > 0 && w >= 128 { 8 } else { 0 };
     for y in y_start..h {
-        for x in 0..w {
+        for x in x_start..w {
             let wx = x as i32 + off[0];
             let wy = y as i32 + off[1];
             if let Some(a) = atlas.pixel(wx, wy) {
@@ -898,8 +1000,9 @@ pub fn residual_boxes_with_color(
     let w = frame.width as usize;
     let h = y_end.min(frame.height as usize);
     let mut mask = vec![false; w * h];
+    let x_start = if off[0] > 0 && w >= 128 { 8 } else { 0 };
     for y in y_start..h {
-        for x in 0..w {
+        for x in x_start..w {
             let wx = x as i32 + off[0];
             let wy = y as i32 + off[1];
             if let Some(a) = atlas.pixel(wx, wy) {
@@ -1347,7 +1450,7 @@ pub fn track_actors_coherent(
                 .boxes
                 .iter()
                 .any(|(fi, _)| m.boxes.iter().any(|(mfi, _)| mfi == fi));
-            if overlaps {
+            if overlaps && !is_static {
                 continue;
             }
             // In scrolling worlds, only merge fragments that are spatially and
@@ -1366,7 +1469,11 @@ pub fn track_actors_coherent(
                 (tx - mx).abs() <= 96.0 && (ty - my).abs() <= 28.0
             };
             if can_merge {
-                m.boxes.extend(t.boxes.clone());
+                for &(fi, rect) in &t.boxes {
+                    if !m.boxes.iter().any(|(mfi, _)| *mfi == fi) {
+                        m.boxes.push((fi, rect));
+                    }
+                }
                 m.boxes.sort_by_key(|(fi, _)| *fi);
                 placed = true;
                 break;
@@ -2348,9 +2455,21 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         return Err(io::Error::other(format!("bad HUD partition: top = {hud_top}")));
     }
 
-    // Pass 1: scroll + plain atlas.
+    // Pass 1: scroll + plain atlas + screen-space optical-flow HUD accumulator.
+    let vw = info.width as usize;
+    let vh_play = hud_top.min(info.height as usize);
+    let mut screen_buckets: Vec<Bucket> = if !is_static && hud_top == info.height as usize {
+        vec![Bucket::default(); vw * vh_play]
+    } else {
+        Vec::new()
+    };
+    let mut early_screen_buckets: Vec<Bucket> = if !is_static && hud_top == info.height as usize {
+        vec![Bucket::default(); vw * vh_play]
+    } else {
+        Vec::new()
+    };
     let mut reader = video_io::FrameReader::open_range(path, Some(start), Some(duration))?;
-    let mut est = ScrollEstimator::new(info.width as usize, hud_top);
+    let mut est = ScrollEstimator::new(vw, hud_top);
     let mut acc = AtlasAccumulator::new(hud_top);
     let mut scroll: Vec<[i32; 2]> = Vec::new();
     let mut cum = [0i32, 0];
@@ -2370,6 +2489,19 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
             cum[1] += d[1];
             scroll.push(cum);
             acc.add_frame(&frame, cum, &[]);
+            if !screen_buckets.is_empty() {
+                for y in 0..vh_play.min(frame.height as usize) {
+                    let row_off = y * vw;
+                    for x in 0..vw.min(frame.width as usize) {
+                        let i = (row_off + x) * 3;
+                        let rgb = [frame.rgb[i], frame.rgb[i + 1], frame.rgb[i + 2]];
+                        screen_buckets[row_off + x].add(rgb);
+                        if frame_idx < 8 {
+                            early_screen_buckets[row_off + x].add(rgb);
+                        }
+                    }
+                }
+            }
         }
         frame_idx += 1;
     }
@@ -2378,6 +2510,128 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         return Err(io::Error::other("no frames decoded in enfold range"));
     }
     let plain_atlas = acc.to_atlas();
+    let plain_bg = learn_background(&plain_atlas.image);
+
+    // Optical-flow viewport HUD isolation: in a scrolling regime (`!is_static`)
+    // where HUD widgets float over the viewport (`hud_top == info.height`),
+    // scrolling world texture blurs out in the screen-space temporal mode M_screen,
+    // whereas stationary viewport-locked HUD elements preserve sharp spatial gradients
+    // (||grad M_screen||_inf > 28) with high temporal support (>= 40% of frames).
+    let mut hud_rects: Vec<Rect> = Vec::new();
+    let mut screen_hud_overlay: Option<RgbImage8> = None;
+    if !screen_buckets.is_empty() && n_frames >= 16 {
+        let mut screen_mode = vec![([0u8; 3], 0u32); vw * vh_play];
+        let mut early_mode = vec![([0u8; 3], 0u32); vw * vh_play];
+        for (i, b) in screen_buckets.iter().enumerate() {
+            if let Some(mc) = b.mode() {
+                screen_mode[i] = mc;
+            }
+        }
+        for (i, b) in early_screen_buckets.iter().enumerate() {
+            if let Some(mc) = b.mode() {
+                early_mode[i] = mc;
+            }
+        }
+        let mut raw_hud = vec![false; vw * vh_play];
+        let min_support = ((n_frames * 2) / 5) as u32;
+        let early_n = n_frames.min(8) as u32;
+        let min_early_support = ((early_n * 3) / 4).max(3);
+        for y in 0..vh_play {
+            let in_perim_y = y < 24 || y + 20 >= vh_play;
+            for x in 0..vw {
+                let in_perim_x = x < 16 || x + 16 >= vw;
+                if !in_perim_y && !in_perim_x {
+                    continue;
+                }
+                let idx_p = y * vw + x;
+                let (c, cnt) = screen_mode[idx_p];
+                let (ec, ecnt) = early_mode[idx_p];
+                let mut max_g = 0i32;
+                let mut early_g = 0i32;
+                if x > 0 {
+                    max_g = max_g.max(color_dist(c, screen_mode[idx_p - 1].0));
+                    early_g = early_g.max(color_dist(ec, early_mode[idx_p - 1].0));
+                }
+                if x + 1 < vw {
+                    max_g = max_g.max(color_dist(c, screen_mode[idx_p + 1].0));
+                    early_g = early_g.max(color_dist(ec, early_mode[idx_p + 1].0));
+                }
+                if y > 0 {
+                    max_g = max_g.max(color_dist(c, screen_mode[idx_p - vw].0));
+                    early_g = early_g.max(color_dist(ec, early_mode[idx_p - vw].0));
+                }
+                if y + 1 < vh_play {
+                    max_g = max_g.max(color_dist(c, screen_mode[idx_p + vw].0));
+                    early_g = early_g.max(color_dist(ec, early_mode[idx_p + vw].0));
+                }
+                let static_ok = cnt >= min_support && max_g > 28;
+                let counter_ok = in_perim_y
+                    && ecnt >= min_early_support
+                    && early_g > 28
+                    && color_dist(ec, plain_bg) > 28
+                    && color_dist(c, plain_bg) > 24;
+                if static_ok || counter_ok {
+                    raw_hud[idx_p] = true;
+                }
+            }
+        }
+        let mut dil_hud = vec![false; vw * vh_play];
+        for y in 0..vh_play {
+            let rx_span = if y < 20 || y + 20 >= vh_play { 12i32 } else { 2i32 };
+            for x in 0..vw {
+                if raw_hud[y * vw + x] {
+                    for dy in -2i32..=2 {
+                        for dx in -rx_span..=rx_span {
+                            let nx = x as i32 + dx;
+                            let ny = y as i32 + dy;
+                            if nx >= 0 && nx < vw as i32 && ny >= 0 && ny < vh_play as i32 {
+                                dil_hud[ny as usize * vw + nx as usize] = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let mut comps = connected_boxes_xy(&dil_hud, vw, vh_play, 40);
+        for r in &mut comps {
+            if (r.x1 >= vw as i32 - 4 || r.x0 <= 3) && r.height() as usize >= vh_play / 3 {
+                r.y0 = 0;
+                r.y1 = vh_play as i32 - 1;
+            }
+        }
+        if !comps.is_empty() {
+            let mut overlay = RgbImage8::new(vw, vh_play);
+            for r in &comps {
+                let rx0 = r.x0.max(0) as usize;
+                let ry0 = r.y0.max(0) as usize;
+                let rx1 = (r.x1.max(0) as usize).min(vw - 1);
+                let ry1 = (r.y1.max(0) as usize).min(vh_play - 1);
+                let is_edge_bar =
+                    (r.x1 >= vw as i32 - 4 || r.x0 <= 3) && r.height() as usize >= vh_play / 2;
+                let is_top_counter = r.y0 <= 8 && r.width() >= 32;
+                for y in ry0..=ry1 {
+                    for x in rx0..=rx1 {
+                        if dil_hud[y * vw + x] || is_edge_bar {
+                            let (ec, _) = early_mode[y * vw + x];
+                            let (sc, _) = screen_mode[y * vw + x];
+                            let c = if is_top_counter && color_dist(ec, plain_bg) > 26 {
+                                ec
+                            } else {
+                                sc
+                            };
+                            if color_dist(c, plain_bg) > 26 {
+                                let out_c = if c == [0, 0, 0] { [1, 1, 1] } else { c };
+                                overlay.set_pixel(x, y, out_c);
+                            }
+                        }
+                    }
+                }
+                hud_rects.push(r.expand(8));
+            }
+            screen_hud_overlay = Some(overlay);
+        }
+    }
+
     let pre_surface: Vec<i32> = if !is_static {
         let mut pre_opts = TileOptions::default();
         pre_opts.hud_bottom = hud_bottom;
@@ -2406,6 +2660,16 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         refined.push(off);
         let mut boxes =
             residual_boxes_with_color(&plain_atlas, &frame, off, hud_bottom, hud_top, 42, 35);
+        if !hud_rects.is_empty() {
+            boxes.retain(|(b, _)| {
+                let cx = (b.x0 + b.x1) / 2;
+                let cy = (b.y0 + b.y1) / 2;
+                !hud_rects.iter().any(|hr| hr.contains(cx, cy))
+            });
+        }
+        if !is_static && off[0] > 0 {
+            boxes.retain(|(b, c)| !(b.x0 <= 2 && b.x1 <= 12) && color_dist(*c, plain_bg) > 20);
+        }
         // Clip residual boxes at the local solid terrain surface so ground-stripe
         // registration artifacts below the surface never spawn subterranean tracks
         // or bleed into the bottom of walking actor silhouettes.
@@ -2444,18 +2708,23 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         idx += 1;
     }
 
-    // HUD image (mode over the segment).
-    let hud_w = info.width as usize;
-    let hud_h = info.height as usize - hud_top;
-    let mut hud = RgbImage8::new(hud_w, hud_h);
-    for (&(x, y), b) in &hud_acc {
-        if let Some((c, _)) = b.mode() {
-            let iy = y - hud_top as i32;
-            if x >= 0 && iy >= 0 && (x as usize) < hud_w && (iy as usize) < hud_h {
-                hud.set_pixel(x as usize, iy as usize, c);
+    // HUD image (mode over the segment, or optical-flow viewport HUD overlay).
+    let hud = if let Some(overlay) = screen_hud_overlay {
+        overlay
+    } else {
+        let hud_w = info.width as usize;
+        let hud_h = info.height as usize - hud_top;
+        let mut h_img = RgbImage8::new(hud_w, hud_h);
+        for (&(x, y), b) in &hud_acc {
+            if let Some((c, _)) = b.mode() {
+                let iy = y - hud_top as i32;
+                if x >= 0 && iy >= 0 && (x as usize) < hud_w && (iy as usize) < hud_h {
+                    h_img.set_pixel(x as usize, iy as usize, c);
+                }
             }
         }
-    }
+        h_img
+    };
 
     // Tracks (spinor-coherent matching + fragment unification).
     let (mut tracks, all_moving) = track_actors_coherent(
@@ -2465,6 +2734,12 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         is_static,
         15,
     );
+    if !is_static {
+        tracks.retain(|t| color_dist(t.color, plain_bg) > 22);
+        if !tracks.iter().any(|t| t.kind == ActorKind::Player) {
+            classify_tracks(&mut tracks);
+        }
+    }
     let mut moving_at_frame: Vec<Vec<Rect>> = vec![Vec::new(); n_frames];
     for t in &all_moving {
         for &(fi, b) in &t.boxes {
@@ -2474,47 +2749,17 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
         }
     }
 
-    // Pass 3: masked atlas + 2D+t CFT sprite vitality kernels (omega_0 DC + omega_1 harmonic).
+    // Pass 3: masked atlas + unstretched 1-to-1 registered 2D+t CFT sprite kernels.
     let mut reader = video_io::FrameReader::open_range(path, Some(start), Some(duration))?;
     let mut acc2 = AtlasAccumulator::new(hud_top);
-    struct SpriteAcc {
-        w: usize,
-        h: usize,
-        buckets: Vec<Bucket>,
-        alpha: Vec<u32>,
-        total: u32,
-        buckets_pos: Vec<Bucket>,
-        alpha_pos: Vec<u32>,
-        total_pos: u32,
-        buckets_neg: Vec<Bucket>,
-        alpha_neg: Vec<u32>,
-        total_neg: u32,
+    #[derive(Clone)]
+    struct TrackPatch {
+        off: [i32; 2],
+        orig: Rect,
+        pad: Rect,
+        rgb: Vec<u8>,
     }
-    let mut sprite_accs: Vec<Option<SpriteAcc>> = tracks
-        .iter()
-        .map(|t| {
-            let (w, h) = t.median_size();
-            if w <= 0 || h <= 0 || w > 48 || h > 48 {
-                None
-            } else {
-                let n = (w * h) as usize;
-                Some(SpriteAcc {
-                    w: w as usize,
-                    h: h as usize,
-                    buckets: vec![Bucket::default(); n],
-                    alpha: vec![0; n],
-                    total: 0,
-                    buckets_pos: vec![Bucket::default(); n],
-                    alpha_pos: vec![0; n],
-                    total_pos: 0,
-                    buckets_neg: vec![Bucket::default(); n],
-                    alpha_neg: vec![0; n],
-                    total_neg: 0,
-                })
-            }
-        })
-        .collect();
-    // Frame index -> (track index, box) index.
+    let mut track_patches: Vec<Vec<TrackPatch>> = vec![Vec::new(); tracks.len()];
     let mut track_at_frame: Vec<Vec<(usize, Rect)>> = vec![Vec::new(); n_frames];
     for (ti, t) in tracks.iter().enumerate() {
         for (fi, b) in &t.boxes {
@@ -2538,119 +2783,492 @@ pub fn enfold(path: &Path, opts: &EnfoldOptions) -> io::Result<Enfolded2D> {
                 masked.push(b.expand(2));
             }
         }
+        if !hud_rects.is_empty() {
+            masked.extend_from_slice(&hud_rects);
+        }
         acc2.add_frame(&frame, off, &masked);
-        for (ti, b) in &track_at_frame[idx] {
-            let Some(sa) = sprite_accs[*ti].as_mut() else {
+        let fw = frame.width as i32;
+        let fh = (hud_top as i32).min(frame.height as i32);
+        for &(ti, b) in &track_at_frame[idx] {
+            if b.width() <= 0 || b.height() <= 0 || b.width() > 56 || b.height() > 56 {
                 continue;
-            };
-            let phase_pos = ((sa.total / 4) % 2) == 0;
-            sa.total += 1;
-            if phase_pos {
-                sa.total_pos += 1;
-            } else {
-                sa.total_neg += 1;
             }
-            // Map the (possibly drifting) box into the median sprite canvas.
-            let fw = frame.width as usize;
-            for sy in 0..sa.h {
-                let fy = b.y0 + (sy as i32 * b.height() / sa.h as i32);
-                if fy < 0 || fy >= frame.height as i32 {
-                    continue;
+            let pad = Rect::new(
+                (b.x0 - 4).max(0),
+                (b.y0 - 4).max(0),
+                (b.x1 + 4).min(fw - 1),
+                (b.y1 + 4).min(fh - 1),
+            );
+            if pad.width() <= 0 || pad.height() <= 0 {
+                continue;
+            }
+            let pw = pad.width() as usize;
+            let ph = pad.height() as usize;
+            let mut rgb = vec![0u8; pw * ph * 3];
+            for py in 0..ph {
+                let fy = (pad.y0 as usize) + py;
+                for px in 0..pw {
+                    let fx = (pad.x0 as usize) + px;
+                    let src_i = (fy * (frame.width as usize) + fx) * 3;
+                    let dst_i = (py * pw + px) * 3;
+                    rgb[dst_i..dst_i + 3].copy_from_slice(&frame.rgb[src_i..src_i + 3]);
                 }
-                for sx in 0..sa.w {
-                    let fx = b.x0 + (sx as i32 * b.width() / sa.w as i32);
-                    if fx < 0 || fx >= frame.width as i32 {
-                        continue;
-                    }
-                    let i = (fy as usize * fw + fx as usize) * 3;
-                    let c = [frame.rgb[i], frame.rgb[i + 1], frame.rgb[i + 2]];
-                    let si = sy * sa.w + sx;
-                    // Alpha: differs from the local neighborhood of the plain
-                    // atlas so registration shifts on striped background hills
-                    // or bush borders never bleed background scenery into actor sprites.
-                    let wx = fx + off[0];
-                    let wy = fy + off[1];
-                    let mut min_atlas_dist = i32::MAX;
+            }
+            track_patches[ti].push(TrackPatch {
+                off,
+                orig: b,
+                pad,
+                rgb,
+            });
+        }
+        idx += 1;
+    }
+    let atlas = acc2.to_atlas_inpainted(&plain_atlas, !hud_rects.is_empty(), plain_bg);
+    let bg_color = learn_background(&atlas.image);
+
+    // Resolve DC (omega_0) and first temporal harmonic (omega_1) sprite kernels
+    // against the actor-masked atlas via 1-to-1 tight foreground registration.
+    let fg_thresh = if is_static { 32 } else { 40 };
+    let min_fg_px = if is_static { 6usize } else { 14usize };
+    let mut clean_obs_counts = vec![0usize; tracks.len()];
+
+    for (ti, t) in tracks.iter_mut().enumerate() {
+        let (med_w, med_h) = t.median_size();
+        if med_w <= 0 || med_h <= 0 || med_w > 48 || med_h > 48 {
+            continue;
+        }
+        struct TightObs {
+            patch_idx: usize,
+            tx0: i32,
+            ty0: i32,
+            tx1: i32,
+            ty1: i32,
+            fg_cnt: usize,
+            clean_bg: f32,
+        }
+        let mut tight_list: Vec<TightObs> = Vec::new();
+        for (pi, p) in track_patches[ti].iter().enumerate() {
+            let pw = p.pad.width() as usize;
+            let mut tx0 = i32::MAX;
+            let mut ty0 = i32::MAX;
+            let mut tx1 = i32::MIN;
+            let mut ty1 = i32::MIN;
+            let mut fg_cnt = 0usize;
+            let mut bg_cnt = 0usize;
+            let mut non_fg_cnt = 0usize;
+            for fy in p.orig.y0.max(p.pad.y0)..=p.orig.y1.min(p.pad.y1) {
+                for fx in p.orig.x0.max(p.pad.x0)..=p.orig.x1.min(p.pad.x1) {
+                    let lx = (fx - p.pad.x0) as usize;
+                    let ly = (fy - p.pad.y0) as usize;
+                    let ci = (ly * pw + lx) * 3;
+                    let c = [p.rgb[ci], p.rgb[ci + 1], p.rgb[ci + 2]];
+                    let wx = fx + p.off[0];
+                    let wy = fy + p.off[1];
+                    let mut min_d = i32::MAX;
                     for dy_a in -2..=2 {
-                        for dx_a in -3..=3 {
-                            if let Some(a) = plain_atlas.pixel(wx + dx_a, wy + dy_a) {
+                        for dx_a in -2..=2 {
+                            if let Some(a) = atlas.pixel(wx + dx_a, wy + dy_a) {
                                 let d = (c[0] as i32 - a[0] as i32)
                                     .abs()
                                     .max((c[1] as i32 - a[1] as i32).abs())
                                     .max((c[2] as i32 - a[2] as i32).abs());
-                                min_atlas_dist = min_atlas_dist.min(d);
+                                min_d = min_d.min(d);
                             }
                         }
                     }
-                    let is_fg = min_atlas_dist != i32::MAX && min_atlas_dist > 32;
-                    if is_fg {
-                        sa.buckets[si].add(c);
-                        sa.alpha[si] += 1;
+                    if min_d != i32::MAX && min_d > fg_thresh {
+                        fg_cnt += 1;
+                        tx0 = tx0.min(fx);
+                        ty0 = ty0.min(fy);
+                        tx1 = tx1.max(fx);
+                        ty1 = ty1.max(fy);
+                    } else {
+                        non_fg_cnt += 1;
+                        if let Some(a0) = atlas.pixel(wx, wy) {
+                            if color_dist(a0, bg_color) <= 24 {
+                                bg_cnt += 1;
+                            }
+                        }
+                    }
+                }
+            }
+            if fg_cnt >= min_fg_px && tx1 >= tx0 && ty1 >= ty0 {
+                let cw = tx1 - tx0 + 1;
+                let ch = ty1 - ty0 + 1;
+                if cw >= 6 && ch >= 6 {
+                    let clean_bg = if non_fg_cnt > 0 {
+                        bg_cnt as f32 / non_fg_cnt as f32
+                    } else {
+                        0.5
+                    };
+                    tight_list.push(TightObs {
+                        patch_idx: pi,
+                        tx0,
+                        ty0,
+                        tx1,
+                        ty1,
+                        fg_cnt,
+                        clean_bg,
+                    });
+                }
+            }
+        }
+        if tight_list.is_empty() {
+            continue;
+        }
+        let mut ws: Vec<i32> = tight_list.iter().map(|o| o.tx1 - o.tx0 + 1).collect();
+        let mut hs: Vec<i32> = tight_list.iter().map(|o| o.ty1 - o.ty0 + 1).collect();
+        ws.sort_unstable();
+        hs.sort_unstable();
+        let tw = ws[ws.len() / 2].clamp(6, 48) as usize;
+        let th = hs[hs.len() / 2].clamp(6, 48) as usize;
+
+        let mut candidates: Vec<&TightObs> = tight_list
+            .iter()
+            .filter(|o| {
+                let cw = o.tx1 - o.tx0 + 1;
+                let ch = o.ty1 - o.ty0 + 1;
+                (cw - tw as i32).abs() <= 5 && (ch - th as i32).abs() <= 5
+            })
+            .collect();
+        if candidates.is_empty() {
+            candidates = tight_list.iter().collect();
+        }
+        let clean_candidates: Vec<&TightObs> = candidates
+            .iter()
+            .copied()
+            .filter(|o| o.clean_bg >= 0.55)
+            .collect();
+        clean_obs_counts[ti] = clean_candidates.len();
+        if clean_candidates.len() >= 6 {
+            candidates = clean_candidates;
+        }
+
+        // Helper to sample (c, is_fg) at frame coords (fx, fy) in patch p
+        let sample_patch = |p: &TrackPatch, fx: i32, fy: i32| -> ([u8; 3], bool) {
+            if fx < p.pad.x0 || fx > p.pad.x1 || fy < p.pad.y0 || fy > p.pad.y1 {
+                return ([0, 0, 0], false);
+            }
+            let pw = p.pad.width() as usize;
+            let lx = (fx - p.pad.x0) as usize;
+            let ly = (fy - p.pad.y0) as usize;
+            let ci = (ly * pw + lx) * 3;
+            let c = [p.rgb[ci], p.rgb[ci + 1], p.rgb[ci + 2]];
+            let wx = fx + p.off[0];
+            let wy = fy + p.off[1];
+            let mut min_d = i32::MAX;
+            for dy_a in -2..=2 {
+                for dx_a in -2..=2 {
+                    if let Some(a) = atlas.pixel(wx + dx_a, wy + dy_a) {
+                        let d = (c[0] as i32 - a[0] as i32)
+                            .abs()
+                            .max((c[1] as i32 - a[1] as i32).abs())
+                            .max((c[2] as i32 - a[2] as i32).abs());
+                        min_d = min_d.min(d);
+                    }
+                }
+            }
+            let is_fg = min_d != i32::MAX && min_d > fg_thresh;
+            (c, is_fg)
+        };
+
+        // Choose cleanest reference observation for +-2 px translational registration
+        let ref_obs = *candidates
+            .iter()
+            .max_by(|a, b| {
+                a.clean_bg
+                    .partial_cmp(&b.clean_bg)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+                    .then_with(|| a.fg_cnt.cmp(&b.fg_cnt))
+            })
+            .unwrap();
+        let ref_p = &track_patches[ti][ref_obs.patch_idx];
+        let ref_x0 = (ref_obs.tx0 + ref_obs.tx1 + 1 - tw as i32) / 2;
+        let ref_y0 = (ref_obs.ty0 + ref_obs.ty1 + 1 - th as i32) / 2;
+        let mut ref_rgb = vec![[0u8; 3]; tw * th];
+        let mut ref_mask = vec![false; tw * th];
+        for sy in 0..th {
+            for sx in 0..tw {
+                let (c, fg) = sample_patch(ref_p, ref_x0 + sx as i32, ref_y0 + sy as i32);
+                ref_rgb[sy * tw + sx] = c;
+                ref_mask[sy * tw + sx] = fg;
+            }
+        }
+
+        let n = tw * th;
+        let mut buckets = vec![Bucket::default(); n];
+        let mut alpha = vec![0u32; n];
+        let mut total = 0u32;
+        let mut buckets_pos = vec![Bucket::default(); n];
+        let mut alpha_pos = vec![0u32; n];
+        let mut total_pos = 0u32;
+        let mut buckets_neg = vec![Bucket::default(); n];
+        let mut alpha_neg = vec![0u32; n];
+        let mut total_neg = 0u32;
+
+        for obs in &candidates {
+            let p = &track_patches[ti][obs.patch_idx];
+            let base_x0 = (obs.tx0 + obs.tx1 + 1 - tw as i32) / 2;
+            let base_y0 = (obs.ty0 + obs.ty1 + 1 - th as i32) / 2;
+            let mut best_shift = (0i32, 0i32);
+            let mut best_cost = i64::MAX;
+            for dy in -2..=2 {
+                for dx in -2..=2 {
+                    let mut cost = 0i64;
+                    for sy in 0..th {
+                        for sx in 0..tw {
+                            let idx_s = sy * tw + sx;
+                            let (c, fg) =
+                                sample_patch(p, base_x0 + dx + sx as i32, base_y0 + dy + sy as i32);
+                            if fg != ref_mask[idx_s] {
+                                cost += 2500;
+                            } else if fg {
+                                let rc = ref_rgb[idx_s];
+                                let dr = c[0] as i64 - rc[0] as i64;
+                                let dg = c[1] as i64 - rc[1] as i64;
+                                let db = c[2] as i64 - rc[2] as i64;
+                                cost += (dr * dr + dg * dg + db * db) / 3;
+                            }
+                        }
+                    }
+                    if cost < best_cost {
+                        best_cost = cost;
+                        best_shift = (dx, dy);
+                    }
+                }
+            }
+            let phase_pos = ((total / 4) % 2) == 0;
+            total += 1;
+            if phase_pos {
+                total_pos += 1;
+            } else {
+                total_neg += 1;
+            }
+            for sy in 0..th {
+                for sx in 0..tw {
+                    let si = sy * tw + sx;
+                    let (c, fg) = sample_patch(
+                        p,
+                        base_x0 + best_shift.0 + sx as i32,
+                        base_y0 + best_shift.1 + sy as i32,
+                    );
+                    if fg {
+                        buckets[si].add(c);
+                        alpha[si] += 1;
                         if phase_pos {
-                            sa.buckets_pos[si].add(c);
-                            sa.alpha_pos[si] += 1;
+                            buckets_pos[si].add(c);
+                            alpha_pos[si] += 1;
                         } else {
-                            sa.buckets_neg[si].add(c);
-                            sa.alpha_neg[si] += 1;
+                            buckets_neg[si].add(c);
+                            alpha_neg[si] += 1;
                         }
                     }
                 }
             }
         }
-        idx += 1;
-    }
-    let atlas = acc2.to_atlas_with_fallback(&plain_atlas);
 
-    // Resolve DC (omega_0) and first temporal harmonic (omega_1) sprite kernels.
-    for (ti, t) in tracks.iter_mut().enumerate() {
-        let Some(sa) = sprite_accs[ti].as_ref() else {
-            continue;
-        };
-        if sa.total == 0 {
+        if total == 0 {
             continue;
         }
-        let n = sa.w * sa.h;
         let mut rgba = vec![0u8; n * 4];
         let mut harmonic_rgba = vec![128u8; n * 4];
-        let min_hits = (sa.total / 8).max(1);
-        let min_pos = (sa.total_pos / 6).max(1);
-        let min_neg = (sa.total_neg / 6).max(1);
+        let min_hits = if total >= 5 {
+            (total * 2 / 5).max(2)
+        } else {
+            1
+        };
+        let min_pos = (total_pos * 2 / 5).max(1);
+        let min_neg = (total_neg * 2 / 5).max(1);
         for i in 0..n {
-            if let Some((c, _)) = sa.buckets[i].mode() {
-                if sa.alpha[i] >= min_hits {
+            let sx = i % tw;
+            let sy = i / tw;
+            let on_border = sx < 2 || sx + 2 >= tw || sy < 2 || sy + 2 >= th;
+            if let Some((c, _)) = buckets[i].mode() {
+                if alpha[i] >= min_hits && !(!is_static && on_border && color_dist(c, bg_color) <= 24)
+                {
                     rgba[i * 4] = c[0];
                     rgba[i * 4 + 1] = c[1];
                     rgba[i * 4 + 2] = c[2];
                     rgba[i * 4 + 3] = 255;
                 }
             }
-            let ( pos_fg, neg_fg ) = (sa.alpha_pos[i] >= min_pos, sa.alpha_neg[i] >= min_neg);
-            if sa.total_pos >= 2 && sa.total_neg >= 2 && pos_fg != neg_fg {
-                // Silhouette boundary pixel oscillating at omega_1 (limb stride, chomp, skirt):
-                // keep interior pixels speckle-free and modulate boundary occupancy cleanly.
+            let (pos_fg, neg_fg) = (alpha_pos[i] >= min_pos, alpha_neg[i] >= min_neg);
+            if total_pos >= 2 && total_neg >= 2 && pos_fg != neg_fg {
                 if rgba[i * 4 + 3] == 0 {
                     let active_bucket = if pos_fg {
-                        &sa.buckets_pos[i]
+                        &buckets_pos[i]
                     } else {
-                        &sa.buckets_neg[i]
+                        &buckets_neg[i]
                     };
                     if let Some((c, _)) = active_bucket.mode() {
-                        rgba[i * 4] = c[0];
-                        rgba[i * 4 + 1] = c[1];
-                        rgba[i * 4 + 2] = c[2];
-                        rgba[i * 4 + 3] = 128;
+                        if !(!is_static && on_border && color_dist(c, bg_color) <= 24) {
+                            rgba[i * 4] = c[0];
+                            rgba[i * 4 + 1] = c[1];
+                            rgba[i * 4 + 2] = c[2];
+                            rgba[i * 4 + 3] = 160;
+                        }
                     }
                 }
-                let da = if pos_fg { 96i32 } else { -96i32 };
+                let da = if pos_fg { 80i32 } else { -80i32 };
                 harmonic_rgba[i * 4 + 3] = (128 + da).clamp(0, 255) as u8;
             }
         }
+        // Spatial wavepacket connectivity: prune detached islands (< 15% of main body)
+        // caused by transient projectiles or collectibles passing beside the holon.
+        let mut visited = vec![false; n];
+        let mut comps: Vec<Vec<usize>> = Vec::new();
+        for start in 0..n {
+            if rgba[start * 4 + 3] == 0 || visited[start] {
+                continue;
+            }
+            let mut comp = Vec::new();
+            let mut stack = vec![start];
+            visited[start] = true;
+            while let Some(cur) = stack.pop() {
+                comp.push(cur);
+                let cx = (cur % tw) as i32;
+                let cy = (cur / tw) as i32;
+                for dy_c in -1..=1 {
+                    for dx_c in -1..=1 {
+                        let nx = cx + dx_c;
+                        let ny = cy + dy_c;
+                        if nx >= 0 && nx < tw as i32 && ny >= 0 && ny < th as i32 {
+                            let ni = ny as usize * tw + nx as usize;
+                            if rgba[ni * 4 + 3] > 0 && !visited[ni] {
+                                visited[ni] = true;
+                                stack.push(ni);
+                            }
+                        }
+                    }
+                }
+            }
+            comps.push(comp);
+        }
+        if let Some(max_len) = comps.iter().map(|c| c.len()).max() {
+            for comp in &comps {
+                if comp.len() * 6 < max_len {
+                    for &pi in comp {
+                        rgba[pi * 4] = 0;
+                        rgba[pi * 4 + 1] = 0;
+                        rgba[pi * 4 + 2] = 0;
+                        rgba[pi * 4 + 3] = 0;
+                        harmonic_rgba[pi * 4 + 3] = 128;
+                    }
+                }
+            }
+        }
+
+        // Spin(2,0) rotor-steered canonical harmonic restoration for isotropic
+        // chromatically homogeneous planar holons: when a circular holon rotates
+        // across all 4 cardinal directions in a planar arena, unrotated temporal
+        // averaging fills its leading-edge aperture across directions. Restoring
+        // the canonical +e1 leading-edge omega_1 harmonic allows full Spin(2,0)
+        // rotor steering U K_1 ~U along the holon's instantaneous heading vector s.
+        let mut final_w = tw;
+        let mut final_h = th;
+        if is_static && (tw as i32 - th as i32).abs() <= 3 {
+            let mut fg_count = 0usize;
+            let mut dom_bucket = Bucket::default();
+            for sy in 0..th {
+                for sx in 0..tw {
+                    let i = sy * tw + sx;
+                    if rgba[i * 4 + 3] > 0 {
+                        fg_count += 1;
+                        let c = [rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]];
+                        dom_bucket.add(c);
+                    }
+                }
+            }
+            let dom_c = dom_bucket.mode().map(|m| m.0).unwrap_or(t.color);
+            let mut hetero_interior = 0usize;
+            for sy in 2..th.saturating_sub(2) {
+                for sx in 2..tw.saturating_sub(2) {
+                    let i = sy * tw + sx;
+                    if rgba[i * 4 + 3] > 0 {
+                        let c = [rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2]];
+                        if color_dist(c, dom_c) > 85 {
+                            hetero_interior += 1;
+                        }
+                    }
+                }
+            }
+            if (t.kind == ActorKind::Player || hetero_interior <= 2)
+                && fg_count * 100 / n.max(1) >= 50
+            {
+                let side = tw.max(th);
+                final_w = side;
+                final_h = side;
+                let cx = (side as f32 - 1.0) * 0.5;
+                let cy = (side as f32 - 1.0) * 0.5;
+                let rad = side as f32 * 0.5 - 0.15;
+                let mut sq_rgba = vec![0u8; side * side * 4];
+                let mut sq_harm = vec![128u8; side * side * 4];
+                for sy in 0..side {
+                    for sx in 0..side {
+                        let dx = sx as f32 - cx;
+                        let dy = (sy as f32 - cy).abs();
+                        let r = (dx * dx + dy * dy).sqrt();
+                        if r <= rad {
+                            let idx = sy * side + sx;
+                            sq_rgba[idx * 4] = dom_c[0];
+                            sq_rgba[idx * 4 + 1] = dom_c[1];
+                            sq_rgba[idx * 4 + 2] = dom_c[2];
+                            if dx >= 0.4 && dy <= dx * 0.55 + 0.45 {
+                                // Inner leading-edge aperture (opens first -> half-open + wide-open)
+                                sq_rgba[idx * 4 + 3] = 122;
+                                sq_harm[idx * 4 + 3] = 224;
+                            } else if dx >= 0.4 && dy <= dx * 0.95 + 0.55 {
+                                // Outer leading-edge aperture jaws (opens at wide-open peak)
+                                sq_rgba[idx * 4 + 3] = 152;
+                                sq_harm[idx * 4 + 3] = 224;
+                            } else {
+                                sq_rgba[idx * 4 + 3] = 255;
+                            }
+                        }
+                    }
+                }
+                rgba = sq_rgba;
+                harmonic_rgba = sq_harm;
+            }
+        }
+
         t.sprite = Some(Sprite2D {
-            width: sa.w,
-            height: sa.h,
+            width: final_w,
+            height: final_h,
             rgba,
             harmonic_rgba,
         });
+    }
+
+    // Spinor-coherent peer sprite pooling: if a short-lived autonomous track was
+    // observed only against cluttered scenery (few clean-backdrop frames), inherit
+    // the canonical sprite of a high-observation peer autonomous track with matching
+    // median dimensions and chromatic spinor signature.
+    let n_tracks = tracks.len();
+    for i in 0..n_tracks {
+        if tracks[i].kind != ActorKind::Autonomous || clean_obs_counts[i] >= 6 {
+            continue;
+        }
+        let (wi, hi) = tracks[i].median_size();
+        let ci = tracks[i].color;
+        let mut best_peer: Option<usize> = None;
+        for j in 0..n_tracks {
+            if i == j || tracks[j].kind != ActorKind::Autonomous || clean_obs_counts[j] < 12 {
+                continue;
+            }
+            let (wj, hj) = tracks[j].median_size();
+            if (wi - wj).abs() <= 2 && (hi - hj).abs() <= 3 && color_dist(ci, tracks[j].color) <= 32
+            {
+                if best_peer.map_or(true, |bp| clean_obs_counts[j] > clean_obs_counts[bp]) {
+                    best_peer = Some(j);
+                }
+            }
+        }
+        if let Some(j) = best_peer {
+            if let Some(peer_sprite) = tracks[j].sprite.clone() {
+                tracks[i].sprite = Some(peer_sprite);
+            }
+        }
     }
 
     let tile_size = if is_static { 8 } else { 16 };

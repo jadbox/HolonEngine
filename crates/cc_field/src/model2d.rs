@@ -347,14 +347,100 @@ impl Model2D {
                     }
                 }
             }
-            let trajectory: Vec<[i32; 3]> = t
+            let is_planar_static = level.scroll.iter().all(|s| s[0] == 0 && s[1] == 0);
+            let raw_traj: Vec<[i32; 3]> = t
                 .boxes
                 .iter()
                 .map(|(fi, b)| {
                     let s = level.scroll.get(*fi).copied().unwrap_or([0, 0]);
-                    [*fi as i32, b.x0 + s[0], b.y0 + s[1]]
+                    if is_planar_static {
+                        let cx = (b.x0 + b.x1 + 1 - w) / 2 + s[0];
+                        let cy = (b.y0 + b.y1 + 1 - h) / 2 + s[1];
+                        [*fi as i32, cx, cy]
+                    } else {
+                        [*fi as i32, b.x0 + s[0], b.y0 + s[1]]
+                    }
                 })
                 .collect();
+            let trajectory: Vec<[i32; 3]> = if is_planar_static && raw_traj.len() >= 4 {
+                // 1. Short-gap linear interpolation across 1..=8 frame dropouts
+                let mut dense: Vec<[i32; 3]> = Vec::with_capacity(raw_traj.len());
+                for pt in raw_traj {
+                    if let Some(&prev) = dense.last() {
+                        let df = pt[0] - prev[0];
+                        let dx = pt[1] - prev[1];
+                        let dy = pt[2] - prev[2];
+                        if df > 1 && df <= 8 && dx.abs() <= 36 && dy.abs() <= 36 {
+                            for step in 1..df {
+                                let ix = prev[1] + (dx * step + df / 2) / df;
+                                let iy = prev[2] + (dy * step + df / 2) / df;
+                                dense.push([prev[0] + step, ix, iy]);
+                            }
+                        }
+                    }
+                    dense.push(pt);
+                }
+                // 2. Orthogonal corridor median stabilization: lock the coordinate
+                // perpendicular to the active corridor axis to reject bounding-box jitter.
+                let n_pts = dense.len();
+                let mut ortho = dense.clone();
+                for i in 0..n_pts {
+                    let mut lo = i;
+                    while lo > 0
+                        && i - lo < 5
+                        && dense[lo][0] - dense[lo - 1][0] == 1
+                        && (dense[lo][1] - dense[lo - 1][1]).abs() <= 24
+                        && (dense[lo][2] - dense[lo - 1][2]).abs() <= 24
+                    {
+                        lo -= 1;
+                    }
+                    let mut hi = i;
+                    while hi + 1 < n_pts
+                        && hi + 1 - i < 5
+                        && dense[hi + 1][0] - dense[hi][0] == 1
+                        && (dense[hi + 1][1] - dense[hi][1]).abs() <= 24
+                        && (dense[hi + 1][2] - dense[hi][2]).abs() <= 24
+                    {
+                        hi += 1;
+                    }
+                    if hi - lo >= 3 {
+                        let net_dx = (dense[hi][1] - dense[lo][1]).abs();
+                        let net_dy = (dense[hi][2] - dense[lo][2]).abs();
+                        if net_dx >= 4 && net_dy <= 4 && net_dx >= 2 * net_dy {
+                            let mut ys: Vec<i32> = (lo..=hi).map(|k| dense[k][2]).collect();
+                            ys.sort_unstable();
+                            ortho[i][2] = ys[ys.len() / 2];
+                        } else if net_dy >= 4 && net_dx <= 4 && net_dy >= 2 * net_dx {
+                            let mut xs: Vec<i32> = (lo..=hi).map(|k| dense[k][1]).collect();
+                            xs.sort_unstable();
+                            ortho[i][1] = xs[xs.len() / 2];
+                        }
+                    }
+                }
+                // 3. Two-pass [1, 2, 1] / 4 binomial axial smoothing along contiguous segments
+                for _ in 0..2 {
+                    let prev_pass = ortho.clone();
+                    for i in 1..n_pts.saturating_sub(1) {
+                        if prev_pass[i][0] - prev_pass[i - 1][0] == 1
+                            && prev_pass[i + 1][0] - prev_pass[i][0] == 1
+                            && (prev_pass[i + 1][1] - prev_pass[i - 1][1]).abs() <= 24
+                            && (prev_pass[i + 1][2] - prev_pass[i - 1][2]).abs() <= 24
+                        {
+                            ortho[i][1] =
+                                (prev_pass[i - 1][1] + 2 * prev_pass[i][1] + prev_pass[i + 1][1]
+                                    + 2)
+                                    / 4;
+                            ortho[i][2] =
+                                (prev_pass[i - 1][2] + 2 * prev_pass[i][2] + prev_pass[i + 1][2]
+                                    + 2)
+                                    / 4;
+                        }
+                    }
+                }
+                ortho
+            } else {
+                raw_traj
+            };
             let spawn = if trajectory.is_empty() {
                 [0, 0]
             } else {
@@ -763,9 +849,29 @@ impl Model2D {
         let (w, h, mut rgba) = self.sprite_rgba(sprite_idx).ok()?;
         let cos_p = phase.cos();
         let sin_p = phase.sin();
+        let mut is_spin_aperture = false;
         if let Some(hi) = harmonic_idx {
             if let Ok((hw, hh, h_rgba)) = self.sprite_rgba(hi) {
                 if hw == w && hh == h && h_rgba.len() == rgba.len() {
+                    if w == h {
+                        let mut left_active = 0usize;
+                        let mut right_active = 0usize;
+                        for y in 0..h as usize {
+                            for x in 0..w as usize {
+                                let i = y * (w as usize) + x;
+                                if h_rgba[i * 4 + 3] != 128 {
+                                    if x < (w as usize) / 2 {
+                                        left_active += 1;
+                                    } else {
+                                        right_active += 1;
+                                    }
+                                }
+                            }
+                        }
+                        if left_active == 0 && right_active >= 6 {
+                            is_spin_aperture = true;
+                        }
+                    }
                     for i in 0..(w * h) as usize {
                         let base_a = rgba[i * 4 + 3] as f32;
                         let da = (h_rgba[i * 4 + 3] as f32 - 128.0) * cos_p;
@@ -783,22 +889,22 @@ impl Model2D {
             }
         }
         // Spatial CFT phase-shift operator T_phi (Fourier Shift Theorem) for active
-        // locomotion: bipedal alternating foot lift, lower-limb stride shear,
-        // mid-body wing/arm counter-oscillation, and double-frequency torso bob.
-        if phase.abs() > 0.05 && w >= 8 && h >= 8 {
+        // locomotion: preserves rigid interior/head coherence while articulating the
+        // lower propulsion/contact boundary band (lowest 20% of rows).
+        if !is_spin_aperture && phase.abs() > 0.05 && w >= 8 && h >= 8 {
             let wu = w as i32;
             let hu = h as i32;
             let src = rgba.clone();
             rgba.fill(0);
-            let bob_y = if (phase * 2.0).sin() > 0.45 { 1i32 } else { 0 };
-            let stride_x = (sin_p * 1.8).round() as i32;
-            let arm_x = (-sin_p * 1.2).round() as i32;
-            let wing_dy = (cos_p * 1.8).round() as i32;
-            let left_foot_lift = (sin_p.max(0.0) * 2.0).round() as i32;
-            let right_foot_lift = ((-sin_p).max(0.0) * 2.0).round() as i32;
+            let stride_x = if hu >= 22 {
+                (sin_p * 1.1).round() as i32
+            } else {
+                0
+            };
+            let left_foot_lift = (sin_p.max(0.0) * 1.2).round() as i32;
+            let right_foot_lift = ((-sin_p).max(0.0) * 1.2).round() as i32;
 
-            let leg_top = (hu * 2) / 3;
-            let mid_top = hu / 3;
+            let leg_top = (hu * 4) / 5;
             let mid_x = wu / 2;
 
             for y in 0..hu {
@@ -809,14 +915,9 @@ impl Model2D {
                         } else {
                             right_foot_lift
                         };
-                        let sx = if (y - leg_top) >= 2 { stride_x } else { stride_x / 2 };
-                        (sx, lift)
-                    } else if y >= mid_top {
-                        let is_wing = (x - mid_x).abs() >= (wu / 4).max(2);
-                        let wy = if is_wing { wing_dy } else { bob_y };
-                        (arm_x, wy)
+                        (stride_x, lift)
                     } else {
-                        (0, bob_y)
+                        (0, 0)
                     };
                     let sx = (x - dx).clamp(0, wu - 1);
                     let sy = y + dy;
@@ -842,6 +943,72 @@ impl Model2D {
             }
         }
         Some((w, h, rgba))
+    }
+
+    /// Evaluate a holon's 2D+t CFT sprite kernel steered by its instantaneous
+    /// $\text{Spin}(2,0)$ heading vector `heading = [hx, hy]` when the holon has an
+    /// isotropic leading-edge aperture harmonic, or $\text{Pin}(2,0)$ bilateral
+    /// reflection `flip_x` otherwise.
+    pub fn evaluate_sprite_cft_oriented(
+        &self,
+        sprite_idx: usize,
+        harmonic_idx: Option<usize>,
+        phase: f32,
+        heading: [f64; 2],
+        flip_x: bool,
+    ) -> Option<(u32, u32, Vec<u8>)> {
+        let mut is_spin_aperture = false;
+        if let Some(hi) = harmonic_idx {
+            if let Ok((hw, hh, h_rgba)) = self.sprite_rgba(hi) {
+                if hw == hh && hw >= 8 {
+                    let w = hw as usize;
+                    let mut left_active = 0usize;
+                    let mut right_active = 0usize;
+                    for y in 0..w {
+                        for x in 0..w {
+                            if h_rgba[(y * w + x) * 4 + 3] != 128 {
+                                if x < w / 2 {
+                                    left_active += 1;
+                                } else {
+                                    right_active += 1;
+                                }
+                            }
+                        }
+                    }
+                    if left_active == 0 && right_active >= 6 {
+                        is_spin_aperture = true;
+                    }
+                }
+            }
+        }
+        if !is_spin_aperture {
+            return self.evaluate_sprite_cft(sprite_idx, harmonic_idx, phase, flip_x);
+        }
+        let (w, h, src) = self.evaluate_sprite_cft(sprite_idx, harmonic_idx, phase, false)?;
+        let side = w as usize;
+        let [hx, hy] = heading;
+        if hx.abs() >= hy.abs() && hx >= 0.0 {
+            return Some((w, h, src));
+        }
+        let mut dst = vec![0u8; side * side * 4];
+        for dy in 0..side {
+            for dx in 0..side {
+                let (sx, sy) = if hx.abs() >= hy.abs() {
+                    // Left (-e1)
+                    (side - 1 - dx, dy)
+                } else if hy > 0.0 {
+                    // Down (+e2)
+                    (dy, dx)
+                } else {
+                    // Up (-e2)
+                    (side - 1 - dy, dx)
+                };
+                let s_idx = (sy * side + sx) * 4;
+                let d_idx = (dy * side + dx) * 4;
+                dst[d_idx..d_idx + 4].copy_from_slice(&src[s_idx..s_idx + 4]);
+            }
+        }
+        Some((w, h, dst))
     }
 }
 

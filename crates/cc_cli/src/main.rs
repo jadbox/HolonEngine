@@ -485,9 +485,12 @@ impl WorldState2D {
             } else {
                 0.0
             };
-            let hw = t.size[0].max(8) as f32;
-            let hh = t.size[1].max(8) as f32;
-            let spawn_x = if vertical_corridor {
+            let (hw, hh) = t
+                .sprite
+                .and_then(|si| m.sprites.get(si as usize))
+                .map(|s| (s.width.max(8) as f32, s.height.max(8) as f32))
+                .unwrap_or((t.size[0].max(8) as f32, t.size[1].max(8) as f32));
+            let mut spawn_x = if vertical_corridor {
                 if t.spawn[0] > 0 && (t.spawn[0] as usize) < vw {
                     t.spawn[0] as f32
                 } else {
@@ -496,8 +499,38 @@ impl WorldState2D {
             } else {
                 t.spawn[0] as f32
             };
+            let amp_y = (t.span[1].max(16)) as f32;
+            let mut bounds_y = [t.spawn[1] as f32 - amp_y, t.spawn[1] as f32];
             let spawn_y = if vertical_corridor {
                 -50.0 - (auto_idx as f32) * 45.0
+            } else if ay > 0.0 && vertical_mode {
+                // Boundary-coupled vertical oscillator: anchor excursion bounds to the
+                // host horizontal PGA boundary blade B_k intersected by its column.
+                let center_x = spawn_x + hw * 0.5;
+                let mut host_blade: Option<(f32, [i32; 4])> = None;
+                for b in &boundaries {
+                    if b.blade.permeability[2] == 0.0
+                        && (center_x as i32) >= b.blade.rect[0]
+                        && (center_x as i32) <= b.blade.rect[2]
+                    {
+                        let top = b.blade.rect[1] as f32;
+                        if top >= t.spawn[1] as f32 - 4.0 && top <= t.spawn[1] as f32 + hh + 24.0 {
+                            if host_blade.map_or(true, |(cur, _)| top < cur) {
+                                host_blade = Some((top, b.blade.rect));
+                            }
+                        }
+                    }
+                }
+                if let Some((top, rect)) = host_blade {
+                    let bw = rect[2] - rect[0] + 1;
+                    if bw <= 48 {
+                        spawn_x = ((rect[0] + rect[2] + 1) as f32 - hw) * 0.5;
+                    }
+                    bounds_y = [top - hh, top];
+                    top - hh
+                } else {
+                    t.spawn[1] as f32
+                }
             } else if ay > 0.0 && !vertical_mode {
                 let center_x = spawn_x + hw * 0.5;
                 let feet_est = t.spawn[1] as f32 + hh;
@@ -526,11 +559,12 @@ impl WorldState2D {
                         }
                     }
                 }
-                best_surface.map_or(t.spawn[1] as f32, |top| top - hh)
+                let sy = best_surface.map_or(t.spawn[1] as f32, |top| top - hh);
+                bounds_y = [sy - amp_y, sy];
+                sy
             } else {
                 t.spawn[1] as f32
             };
-            let amp_y = (t.span[1].max(16)) as f32;
             let trajectory: std::collections::HashMap<usize, (i32, i32)> = if planar_static {
                 t.trajectory
                     .iter()
@@ -542,7 +576,7 @@ impl WorldState2D {
             let speed = if vertical_corridor {
                 1.2 + ((auto_idx % 3) as f64) * 0.35
             } else if vertical_mode {
-                0.35
+                0.55
             } else if ay > 0.0 {
                 0.5
             } else {
@@ -561,7 +595,7 @@ impl WorldState2D {
                 vel: [0.0, 0.0],
                 size: [hw, hh],
                 speed,
-                bounds_y: [spawn_y - amp_y, spawn_y],
+                bounds_y,
                 on_support: false,
                 phase: 0.0,
                 cde: cc_math::CliffordDensityElement::new(1.0, theta0, 0, 3, t.color),
@@ -837,14 +871,25 @@ impl WorldState2D {
 
             for a in self.holons.iter_mut().skip(1) {
                 if a.cde.state() == 2 {
+                    // [Primitive State Idempotents: Collapsed Ideal Attenuation]
+                    // Attenuate left-ideal amplitude R toward 0 after collapse into \epsilon_2.
+                    a.cde.amplitude = (a.cde.amplitude - 0.08).max(0.0);
                     continue;
                 }
                 // [Bilinear Invariant: Bohmian Momentum] P_B = rho * v_0 * s
                 let [vx_f64, vy_f64] = a.cde.bohm_momentum(a.speed);
                 if vy_f64.abs() > vx_f64.abs() {
                     let vy = vy_f64 as f32;
-                    if a.pos[1] >= a.bounds_y[1] - 1.0 && (px - a.pos[0]).abs() <= a.size[0] * 1.25
-                    {
+                    let dist_x = ((px + pw * 0.5) - (a.pos[0] + a.size[0] * 0.5)).abs();
+                    if dist_x <= 48.0 {
+                        // Active-information pressure from the primary wavepacket drives a
+                        // boundary-coupled oscillator into its host boundary node B_k.
+                        a.pos[1] = (a.pos[1] + (a.speed as f32) * 3.0).min(a.bounds_y[1]);
+                        a.phase += (a.speed as f32) * 0.25;
+                        if a.pos[1] >= a.bounds_y[1] - 0.5 {
+                            a.pos[1] = a.bounds_y[1];
+                            a.cde.set_heading_angle(-std::f64::consts::FRAC_PI_2);
+                        }
                         continue;
                     }
                     a.pos[1] = (a.pos[1] + vy).clamp(a.bounds_y[0], a.bounds_y[1]);
@@ -922,7 +967,7 @@ impl WorldState2D {
                     && px < (a.pos[0] + a.size[0])
                 {
                     let _ = a.cde.transition_to(2, &self.basis);
-                    a.cde.amplitude = 0.0;
+                    a.cde.amplitude = 1.0;
                     bounce_player = true;
                     new_impacts += 1;
                 }
@@ -1082,14 +1127,43 @@ impl WorldState2D {
             self.cam = [0, 0];
             for h in &mut self.holons {
                 if let Some(&(tx, ty)) = h.trajectory.get(&frame) {
-                    let dx = tx as f32 - h.pos[0];
-                    let dy = ty as f32 - h.pos[1];
+                    let prev = h
+                        .trajectory
+                        .get(&frame.saturating_sub(1))
+                        .copied()
+                        .unwrap_or((tx, ty));
+                    let next = h.trajectory.get(&(frame + 1)).copied().unwrap_or((tx, ty));
+                    let (tx_f, ty_f) = if (tx - prev.0).abs() <= 16
+                        && (next.0 - tx).abs() <= 16
+                        && (ty - prev.1).abs() <= 16
+                        && (next.1 - ty).abs() <= 16
+                    {
+                        (
+                            0.25 * prev.0 as f32 + 0.50 * tx as f32 + 0.25 * next.0 as f32,
+                            0.25 * prev.1 as f32 + 0.50 * ty as f32 + 0.25 * next.1 as f32,
+                        )
+                    } else {
+                        (tx as f32, ty as f32)
+                    };
+                    let p0 = h
+                        .trajectory
+                        .get(&frame.saturating_sub(2))
+                        .copied()
+                        .unwrap_or(prev);
+                    let p1 = h.trajectory.get(&(frame + 2)).copied().unwrap_or(next);
+                    let vx_win = (p1.0 - p0.0) as f32;
+                    let vy_win = (p1.1 - p0.1) as f32;
+                    let win_ds = (vx_win * vx_win + vy_win * vy_win).sqrt();
+                    let dx = tx_f - h.pos[0];
+                    let dy = ty_f - h.pos[1];
                     let ds = (dx * dx + dy * dy).sqrt();
-                    h.phase += ds * 0.40;
-                    if ds > 0.5 && dx.abs() < (self.aw as f32 * 0.5) {
-                        h.cde.set_heading_angle((dy as f64).atan2(dx as f64));
+                    if win_ds >= 1.2 && vx_win.abs() < (self.aw as f32 * 0.45) {
+                        h.phase += ds.clamp(0.85, 2.5) * 0.52;
+                        h.cde.set_heading_angle((vy_win as f64).atan2(vx_win as f64));
+                    } else if ds > 0.5 && dx.abs() < (self.aw as f32 * 0.45) {
+                        h.phase += ds * 0.45;
                     }
-                    h.pos = [tx as f32, ty as f32];
+                    h.pos = [tx_f, ty_f];
                 } else {
                     // [Active Information: Quantum Torque Steering]
                     // \Omega_Q = s \wedge (-\nabla Q_Cl) steers autonomous holons through open corridors without pathfinding
@@ -1175,6 +1249,9 @@ impl WorldState2D {
                 let sx = cam_x + x;
                 let i = (y * vw + x) * 3;
                 let src = model.hud.as_ref().and_then(|hud| {
+                    if hud.height >= vh {
+                        return None;
+                    }
                     let hy = y.checked_sub(hud_top)?;
                     if hy < hud.height && x < hud.width {
                         Some((hy * hud.width + x) * 3)
@@ -1359,7 +1436,10 @@ impl WorldState2D {
             let Some(h) = self.holons.get(hi) else {
                 continue;
             };
-            if h.respawn_timer > 0 || frame < h.spawn_delay {
+            if h.respawn_timer > 0
+                || frame < h.spawn_delay
+                || (h.cde.state() == 2 && h.cde.amplitude <= 0.0)
+            {
                 continue;
             }
             let ax = h.pos[0].round() as i32 - if screen_space_actors { 0 } else { cam_x as i32 };
@@ -1372,6 +1452,7 @@ impl WorldState2D {
                 continue;
             }
             let [hx, hy] = h.cde.heading_vector();
+            let is_vert_osc = !h.is_primary && self.env_drift[1] > 0.0 && hy.abs() > hx.abs();
             let flip_x = if !h.is_primary && self.env_drift[1] > 0.0 && hx.abs() >= hy.abs() {
                 let is_bilateral = (h.size[0] - h.size[1]).abs() <= 4.0;
                 if is_bilateral {
@@ -1385,7 +1466,7 @@ impl WorldState2D {
             let eval_phase = if h.cde.state() == 2 { 0.0 } else { h.phase };
             if let Some(si) = h.sprite_idx {
                 if let Some((sw_u, sh_u, rgba)) =
-                    model.evaluate_sprite_cft(si, h.harmonic_idx, eval_phase, flip_x)
+                    model.evaluate_sprite_cft_oriented(si, h.harmonic_idx, eval_phase, [hx, hy], flip_x)
                 {
                     let sw = sw_u as i32;
                     let sh = sh_u as i32;
@@ -1395,7 +1476,7 @@ impl WorldState2D {
                     } else {
                         sh
                     };
-                    let sy_off = if self.env_drift[1] > 0.0 {
+                    let sy_off = if self.env_drift[1] > 0.0 && !is_vert_osc {
                         (ay + h.size[1] as i32) - render_h
                     } else {
                         ay
@@ -1405,7 +1486,12 @@ impl WorldState2D {
                     } else {
                         ax
                     };
+                    let occlude_world_y = h.bounds_y[1].round() as i32;
                     for sy in 0..render_h {
+                        if is_vert_osc && (h.pos[1].round() as i32 + sy) >= occlude_world_y {
+                            // PGA boundary occlusion: portion of holon inside host boundary B_k
+                            continue;
+                        }
                         let dy = sy_off + sy;
                         if dy < 0 || dy >= vh as i32 {
                             continue;
@@ -1422,17 +1508,11 @@ impl WorldState2D {
                             }
                             let p_idx = ((src_y * sw + sx) * 4) as usize;
                             let alpha = rgba[p_idx + 3] as u32;
-                            if alpha >= 96 {
+                            if alpha >= 112 {
                                 let i = (dy as usize * vw + dx as usize) * 3;
-                                let inv = 255 - alpha;
-                                buf[i] =
-                                    ((rgba[p_idx] as u32 * alpha + buf[i] as u32 * inv) / 255) as u8;
-                                buf[i + 1] = ((rgba[p_idx + 1] as u32 * alpha
-                                    + buf[i + 1] as u32 * inv)
-                                    / 255) as u8;
-                                buf[i + 2] = ((rgba[p_idx + 2] as u32 * alpha
-                                    + buf[i + 2] as u32 * inv)
-                                    / 255) as u8;
+                                buf[i] = rgba[p_idx];
+                                buf[i + 1] = rgba[p_idx + 1];
+                                buf[i + 2] = rgba[p_idx + 2];
                             }
                         }
                     }
@@ -1516,6 +1596,28 @@ impl WorldState2D {
                     buf[idx] = rgb[0];
                     buf[idx + 1] = rgb[1];
                     buf[idx + 2] = rgb[2];
+                }
+            }
+        }
+
+        // 8. Stationary viewport-locked optical-flow HUD overlay (when hud spans viewport height)
+        if let Some(hud) = model.hud.as_ref() {
+            if hud.height >= vh {
+                let hw = hud.width.min(vw);
+                let hh = hud.height.min(vh);
+                for y in 0..hh {
+                    for x in 0..hw {
+                        let s = (y * hud.width + x) * 3;
+                        let r = hud.rgb[s];
+                        let g = hud.rgb[s + 1];
+                        let b = hud.rgb[s + 2];
+                        if r != 0 || g != 0 || b != 0 {
+                            let d = (y * vw + x) * 3;
+                            buf[d] = r;
+                            buf[d + 1] = g;
+                            buf[d + 2] = b;
+                        }
+                    }
                 }
             }
         }

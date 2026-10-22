@@ -149,7 +149,7 @@ Compute the 2D spatial CFT cross-power spectrum $\frac{\hat{I}_t \hat{I}_{t-1}^*
    - [X] Added spinor factorization of 2-body crossing occlusions in `track_actors_coherent` (verified by `enfold2d::tests::spinor_factorization_splits_crossing_tracks`) and removed Mario-specific `ActorKind::Goomba` / `Koopa` enum variants.
 
 
-### Phase 3: 3D Raycast Compiler & Wolfenstein 3D Extraction (`cc_field` 3D)
+### Phase 3: 3D Raycast Compiler & Wolfenstein 3D Extraction (`cc_field` 3D) (FEATURE ON HOLD - DO NOT USE)
 * **Implementor Steps:**
   1. Add `crates/cc_field/src/enfold3d.rs`:
      * `detect_camera_regime` (verifies `Ortho2D` on `example_input2d` and `Perspective3D` on `example_input3d`).
@@ -162,7 +162,7 @@ Compute the 2D spatial CFT cross-power spectrum $\frac{\hat{I}_t \hat{I}_{t-1}^*
     2. Reconstructed orthogonal E1M1 starting room, cyan door, and corridor wall planes within $< 2\%$ depth error,
     3. Canonical $64 \times 64$ guard and wall texture synthesis with $> 25\text{ dB}$ PSNR.
 
-### Phase 4: Wording-Space Spinor Projection & Counterfactual CLI (`cc_field` + `cc_cli`)
+### Phase 4: Wording-Space Spinor Projection & Counterfactual CLI (`cc_field` + `cc_cli`) (FEATURE ON HOLD - DO NOT USE)
 * **Implementor Steps:**
   1. Add optional `llama.cpp` subprocess/HTTP client (`llama-mtmd-cli` / `llama-server` + `llama-embedding`), GBNF schema, and `.cc_cache/` fixture persistence.
   2. Implement Gram-matrix SVD spinor projection and bilinear spinor coherence coupling $\langle \psi_i, \widetilde{\psi}_j \rangle_0$ across both `example_input2d` and `example_input3d`.
