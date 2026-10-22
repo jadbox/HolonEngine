@@ -5,7 +5,7 @@
 
 **HolonEngine** compiles raw gameplay video streams into deterministic, self-contained Implicate World Models that executes with zero neural inference at runtime.
 
-Conventional game engines hardcode per-game state machines (`if is_pacman { eat_dot() } else if is_mario { stomp_goomba() }`), while autoregressive video world models hallucinate pixels frame-by-frame without persistent geometry or conservation laws. **HolonEngine** replaces both with an algebraic process ontology: **`cc enfold`** extracts camera odometry, actor-free panoramas, oriented geometric boundaries, and canonical spinor processes from raw video; **`cc unfold`** evolves the compiled `.cc` world forward via Bohmian momentum, state idempotents, and the Clifford Quantum Potential ($\mathcal{Q}_{\text{Cl}}$).
+Conventional game engines hardcode per-game state machines (`if is_pacman { eat_dot() } else if is_mario { stomp_goomba() }`), while autoregressive video world models hallucinate pixels frame-by-frame without persistent geometry or conservation laws. **HolonEngine** replaces both with an algebraic process ontology: **`cc enfold`** extracts camera odometry, actor-free panoramas, oriented geometric boundaries, and canonical spinor processes from raw video; **`cc unfold`** evolves the compiled `.cc` world forward via Bohmian momentum, state idempotents, and the Clifford Quantum Potential.
 
 ### WIP videos (BUGS! But it almost works.)
 
@@ -22,13 +22,15 @@ https://github.com/user-attachments/assets/21c82063-c287-4301-a63c-7987b43b3e23
 
 ## Core Concepts: The Implicate Order as Computation
 
-Drawing on David Bohm and Basil Hiley's *The Undivided Universe* (1993), Hiley & Callaghan's *The Clifford Algebra Approach to Quantum Mechanics* (2010), and `docs/holon_philosophy.md`, every component of a compiled world is an **Algebraic Holon** coupled to an active spatial medium:
+Conventional game engines treat worlds atomistically: independent objects manipulate loose bags of mutable variables, coordinated by imperative state machines and ad-hoc collision loops. Drawing on David Bohm and Basil Hiley's process physics, **HolonEngine** replaces object atomism with an unbroken implicate order. Every entity is an **Algebraic Holon**—a localized process enfolded in an active spatial medium:
 
-1. **The Clifford Density Element (`CliffordDensityElement`)**: Rather than storing ad-hoc boolean flags, each entity inhabits a minimal left ideal $\Phi_{L,i} = R_i\,U_i\,\epsilon_{i,s}$ with Clifford Density Element $\rho_{c,i} = \Phi_{L,i}\widetilde{\Phi}_{L,i} = \rho_i\,U_i\,\epsilon_{i,s}\,\widetilde{U}_i$. Heading $\mathbf{s}_i = U_i e_1 \widetilde{U}_i$ and Bohm momentum $\mathbf{P}_{B,i} = \rho_i v_{0,i}\mathbf{s}_i$ are extracted directly as algebraic bilinear invariants.
-2. **Primitive State Idempotents & Incidence Transitions**: Discrete behavioral branches (patrol, reflected return, bumped impulse, collapsed/consumed) are mutually orthogonal idempotents $\epsilon_s^2 = \epsilon_s$, $\epsilon_s \epsilon_{s'} = 0$. Geometric incidence in $\mathbb{G}_{3,0,1}$ triggers algebraic transitions $T_{s \to s'} = \epsilon_{s'} M \epsilon_s$ and rotor reflections $U_i \mapsto N U_i \widetilde{N}$.
-3. **Active Information ($\mathcal{Q}_{\text{Cl}} = -(\nabla^2 \Psi)\Psi^{-1}$)**: The spatial medium carries a continuous amplitude-and-spinor field $\Psi = R\,\mathcal{U}$. Its scale-invariant scalar part $\langle \mathcal{Q}_{\text{Cl}} \rangle_0 = -\nabla^2 R / R$ and bivector spin-torque $\Omega_Q = \mathbf{s} \wedge (-\nabla \mathcal{Q}_{\text{Cl}})$ steer autonomous holons through open corridors and around obstacles without game-specific pathfinding.
-4. **Spectral Camera & Scene Discovery**: 2D FFT cross-power phase correlation automatically partitions static HUD overlays, discovers camera regimes (`Ortho2D-Static` arenas, `Ortho2D-Scroll` side-scrollers, `Perspective3D` raycast corridors), and synthesizes ghost-free world panoramas via quantized temporal mode accumulation.
-5. **Continuous Geometry (No Tile Assumption Required)**: Obstacles, one-way surfaces, and collectible excitations are represented as continuous oriented PGA blades ($L_k \in \mathbb{G}_{3,0,1}$) and continuous field impedance $R(x, y)$. When a periodic Bragg peak is present in the 2D CFT, lattice snapping acts as an optional regularizer rather than a structural requirement.
+1. **The Clifford Density Element (`CliffordDensityElement`)**: Rather than juggling fragmented variables (`position`, `velocity`, `facing_left`, `is_grounded`, `is_alive`), an entity's complete physical and operational posture is unified within an algebraic density element. Heading, momentum, and vitality are intrinsic geometric invariants rather than synchronized flags. When process density vanishes, the entity naturally ceases interaction, satisfying conservation laws without ad-hoc cleanup logic.
+2. **Primitive State Idempotents & Incidence Transitions**: Discrete behavioral branches (patrolling, rebounding, absorbing impulses, collapsing) are mutually exclusive operational modes of a single entity. Physical boundary incidence acts as a geometric projection that rotates orientation and transitions behavioral regimes directly, preserving causal continuity across genres without nested conditional branches.
+3. **Active Information & The Clifford Potential**: Space is an active information-bearing medium rather than an empty backdrop. Boundaries, corridors, and targets shape a continuous potential landscape whose curvature exerts steering torque on autonomous entities. Navigation along open corridors and around obstacles emerges directly from field interaction, eliminating graph-based pathfinding (A* or navmeshes).
+4. **Spectral Camera & Scene Discovery**: Frequency-domain analysis separates visual streams into camera motion, stationary interface elements, and background geography without supervision. Phase correlation tracks camera translation across frames, isolates motionless HUD overlays through temporal persistence, and synthesizes ghost-free world panoramas across time without human labeling or inpainting artifacts.
+5. **Continuous Geometry (No Tile Assumption Required)**: Space in game worlds is fundamentally continuous. Surfaces, slopes, barriers, and collectible tokens are represented as oriented geometric boundaries and field impedances. When periodic tile structures are present, the compiler discovers them as spectral resonances to optionally snap contours; when absent, the engine simulates continuous vector geometry without quantization bias.
+
+*(For formal mathematical specifications, spinor derivations, and bilinear invariants, see the [Architecture Whitepaper](docs/holon_whitepaper.md).)*
 
 ---
 
@@ -64,7 +66,7 @@ cargo build --release
 
 ## Documentation
 
-- [**Engine Architecture Whitepaper (`docs/holon_whitepaper.md`)**](./docs/holon_whitepaper.md): Mathematical and systems specification of `CliffordDensityElement`, bilinear invariants, $\mathcal{Q}_{\text{Cl}}$ quantum torque, and tile-free continuous implicate world compilation.
+- [**Engine Architecture Whitepaper (`docs/holon_whitepaper.md`)**](./docs/holon_whitepaper.md): Mathematical and systems specification of `CliffordDensityElement`, bilinear invariants, quantum torque steering, and tile-free continuous implicate world compilation.
 - [**Holon Philosophy (`docs/holon_philosophy.md`)**](./docs/holon_philosophy.md): The Living Page thesis—Implicate Holons in $\mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$, CFT spectral decomposition, and Active-GATr dynamics.
 - [**General Ontology (`philosophy.md`)**](https://github.com/jadbox/dzog/blob/main/philosophy.md): Philosophical and physical foundations of relation-first computing over continuous fields.
 - [**Execution Plan & Roadmap (`docs/plan.md`)**](./docs/plan.md): Phased milestones, verification gates, and audit history across 2D and 3D benchmarks.
@@ -75,6 +77,6 @@ cargo build --release
 
 | Crate | Purpose |
 | :--- | :--- |
-| [`crates/cc_math`](./crates/cc_math) | $\mathbb{G}_{2,0}$ multivectors (`Mv2`), Hiley's `CliffordDensityElement`, `CliffordQuantumPotential` ($\mathcal{Q}_{\text{Cl}}$), primitive `StateIdempotent` & `TransitionOperator`, and $\mathbb{G}_{3,0,1}$ PGA blades/motors. |
+| [`crates/cc_math`](./crates/cc_math) | $\mathbb{G}_{2,0}$ multivectors (`Mv2`), Hiley's `CliffordDensityElement`, `CliffordQuantumPotential`, primitive `StateIdempotent` & `TransitionOperator`, and $\mathbb{G}_{3,0,1}$ PGA blades/motors. |
 | [`crates/cc_field`](./crates/cc_field) | Split-step Fourier wave solver, sampled `QField` gradients, `ffmpeg` video IO, 2D CFT scroll odometry, temporal-mode atlas stitcher, spinor-coherent actor tracker, and `.cc` (`CC2D`) container codec. |
 | [`crates/cc_cli`](./crates/cc_cli) | `cc` command-line compiler and runtime (`enfold`, `inspect`, `unfold`, `sim`, `enfold-dump`). |

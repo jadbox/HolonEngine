@@ -839,6 +839,7 @@ impl WorldState2D {
                 if a.cde.state() == 2 {
                     continue;
                 }
+                // [Bilinear Invariant: Bohmian Momentum] P_B = rho * v_0 * s
                 let [vx_f64, vy_f64] = a.cde.bohm_momentum(a.speed);
                 if vy_f64.abs() > vx_f64.abs() {
                     let vy = vy_f64 as f32;
@@ -848,6 +849,7 @@ impl WorldState2D {
                     }
                     a.pos[1] = (a.pos[1] + vy).clamp(a.bounds_y[0], a.bounds_y[1]);
                     a.phase += vy.abs() * 0.25;
+                    // [Primitive State Idempotents & Incidence Transitions: Vertical Boundary Reflection]
                     if a.pos[1] <= a.bounds_y[0] {
                         a.cde.reflect_at_boundary([0.0, 1.0], &self.basis);
                     } else if a.pos[1] >= a.bounds_y[1] {
@@ -905,11 +907,13 @@ impl WorldState2D {
                         || model.one_way_at_world(check_x, cy).is_some()
                 });
                 if hit_wall {
+                    // [Primitive State Idempotents & Incidence Transitions: Lateral Boundary Reflection]
                     let normal = if vx > 0.0 { [-1.0, 0.0] } else { [1.0, 0.0] };
                     a.cde.reflect_at_boundary(normal, &self.basis);
                 }
 
-                // Top-down relational incidence (P_player ∧ L_actor_top = 0 with v_y > 0)
+                // [Primitive State Idempotents & Incidence Transitions: Top-Down Incidence / Collapse]
+                // (P_player ∧ L_actor_top = 0 with v_y > 0)
                 let p_feet = py + ph;
                 if pvy > 0.0
                     && p_feet >= a.pos[1]
@@ -1003,16 +1007,20 @@ impl WorldState2D {
                 if frame < h.spawn_delay {
                     continue;
                 }
+                // [Bilinear Invariant: Bohmian Momentum] P_B = rho * v_0 * s
                 let [vx, vy] = h.cde.bohm_momentum(h.speed);
                 h.pos[0] += vx as f32;
                 h.pos[1] += (vy as f32).max(1.25);
                 h.phase += 0.30;
 
+                // [Active Information: Quantum Torque Steering]
+                // \Omega_Q = s \wedge (-\nabla Q_Cl) guides autonomous holons along potential corridors
                 let ux = (h.pos[0] / self.vw.max(1) as f32).clamp(0.0, 1.0) as f64;
                 let uy = (h.pos[1] / self.vh.max(1) as f32).clamp(0.0, 1.0) as f64;
                 let [gx, gy] = self.qfield.gradient_at(ux, uy);
                 h.cde.apply_quantum_torque([-gx * 0.001, -gy * 0.001], 0.15);
 
+                // [Primitive State Idempotents & Incidence Transitions: Boundary Reflection]
                 if h.pos[0] <= 16.0 {
                     h.pos[0] = 16.0;
                     h.cde.reflect_at_boundary([1.0, 0.0], &self.basis);
@@ -1083,10 +1091,14 @@ impl WorldState2D {
                     }
                     h.pos = [tx as f32, ty as f32];
                 } else {
+                    // [Active Information: Quantum Torque Steering]
+                    // \Omega_Q = s \wedge (-\nabla Q_Cl) steers autonomous holons through open corridors without pathfinding
                     let ux = (h.pos[0] as f64 / self.aw.max(1) as f64).clamp(0.0, 1.0);
                     let uy = (h.pos[1] as f64 / self.ah.max(1) as f64).clamp(0.0, 1.0);
                     let [gx, gy] = self.qfield.gradient_at(ux, uy);
                     h.cde.apply_quantum_torque([-gx * 0.001, -gy * 0.001], 0.2);
+
+                    // [Bilinear Invariant: Bohmian Momentum] P_B = rho * v_0 * s
                     let [vx, vy] = h.cde.bohm_momentum(h.speed);
                     let ds = (vx * vx + vy * vy).sqrt() as f32;
                     h.phase += ds * 0.40;
@@ -1098,6 +1110,7 @@ impl WorldState2D {
                     if model.solid_at_world(cx, cy).is_none() {
                         h.pos = [nx, ny];
                     } else {
+                        // [Primitive State Idempotents & Incidence Transitions: Boundary Reflection]
                         let normal = if vx.abs() >= vy.abs() {
                             [-vx.signum(), 0.0]
                         } else {

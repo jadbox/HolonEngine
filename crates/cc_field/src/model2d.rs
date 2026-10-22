@@ -667,6 +667,7 @@ impl Model2D {
         total > 0 && (open_px as f64 / total as f64) >= 0.6
     }
 
+    /// [Continuous Geometry: Tile-Free Field Impedance & Potential Construction]
     /// Build the continuous Clifford Quantum Potential field $\mathcal{Q}_{\text{Cl}} = -(\nabla^2 R)/R$
     /// directly from continuous world-space geometry (`solids`, `platforms`, `collectibles`)
     /// without requiring a tile grid (`kinds` may be empty).

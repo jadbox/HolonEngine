@@ -8,6 +8,7 @@
 use cc_math::CliffordQuantumPotential;
 use rustfft::num_complex::Complex;
 
+/// [Active Information: Clifford Quantum Potential Q_Cl = -(∇²Ψ)Ψ⁻¹]
 /// A scalar quantum-potential field plus its sampled gradient.
 #[derive(Clone, Debug)]
 pub struct QField {
@@ -24,7 +25,8 @@ pub struct QField {
 }
 
 impl QField {
-    /// Build `Q = -∇²R / R` from a real amplitude field.
+    /// [Active Information: Scalar Guidance Potential]
+    /// Build scale-invariant potential `⟨Q_Cl⟩_0 = -∇²R / R` from a real amplitude field.
     pub fn from_amplitude(n: usize, dx: f64, amplitude: &[f64], floor: f64) -> Self {
         assert_eq!(amplitude.len(), n * n);
         let lap = laplacian(amplitude, n, dx);
@@ -85,7 +87,8 @@ impl QField {
         self.sample(&self.q, x, y)
     }
 
-    /// Bilinear sample of `-∇⟨Q_Cl⟩_0`, the guidance acceleration direction.
+    /// [Active Information: Guidance Gradient for Quantum Torque Steering]
+    /// Bilinear sample of `-∇⟨Q_Cl⟩_0`, used to compute steering torque $\Omega_Q = \mathbf{s} \wedge (-\nabla\mathcal{Q}_{\text{Cl}})$.
     pub fn gradient_at(&self, x: f64, y: f64) -> [f64; 2] {
         [self.sample(&self.gx, x, y), self.sample(&self.gy, x, y)]
     }

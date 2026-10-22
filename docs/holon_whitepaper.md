@@ -64,9 +64,11 @@ When a geometric incidence predicate fires in $\mathbb{G}_{3,0,1}$, the holon tr
 
 $$T_{s \to s'} = \epsilon_{s'}\,M\,\epsilon_s$$
 
+Simultaneously, boundary incidence against normal $\hat{\mathbf{n}}$ reflects the heading vector $\mathbf{s}_i \mapsto -\hat{\mathbf{n}}\,\mathbf{s}_i\,\hat{\mathbf{n}} = \mathbf{s}_i - 2\langle \mathbf{s}_i, \hat{\mathbf{n}} \rangle \hat{\mathbf{n}}$ (`reflect_at_boundary`), updating the rotor $U_i \in \text{Spin}(2,0)$ to the reflected heading while preserving unit normalization:
+
 | Incidence Event | Geometric Predicate ($\mathbb{G}_{3,0,1}$) | Algebraic Operator ($T_{s \to s'}$) | Emergent Behavior Across Genres |
 | :--- | :--- | :--- | :--- |
-| **Boundary Reflection** | $P_i \wedge L_{\text{wall}} = 0,\; \langle \mathbf{s}_i, \hat{\mathbf{n}} \rangle < 0$ | $U_i \mapsto -\hat{\mathbf{n}} U_i \hat{\mathbf{n}},\; T_{0 \leftrightarrow 1}$ | Platformer enemy reverses patrol at pipe/ledge; maze actor turns at corridor wall. |
+| **Boundary Reflection** | $P_i \wedge L_{\text{wall}} = 0,\; \langle \mathbf{s}_i, \hat{\mathbf{n}} \rangle < 0$ | $\mathbf{s}_i \mapsto -\hat{\mathbf{n}}\mathbf{s}_i\hat{\mathbf{n}},\; T_{0 \leftrightarrow 1}$ | Platformer enemy reverses patrol at pipe/ledge; maze actor turns at corridor wall. |
 | **Top-Down Incidence** | $P_{\text{actor}} \wedge L_{\text{target,top}} = 0,\; \mathbf{P}_B \cdot e_2 > 0$ | Target $T_{s \to 2}$ (collapse), Actor $P_{B,y} \mapsto -\eta P_{B,y}$ | Stomping an enemy collapses it to passive state $\epsilon_2$ and imparts upward restitution. |
 | **Upward Boundary Impulse** | $P_{\text{actor}} \wedge L_{\text{prop,bottom}} = 0,\; \mathbf{P}_B \cdot e_2 < 0$ | Prop $T_{0 \to 1 \to 2}$, emits excitation token | Striking a floating block from below triggers harmonic displacement and token emission. |
 | **Field Excitation Absorption** | $P_{\text{actor}} \cap B_{\text{excitation}} \neq \varnothing$ | Excitation $T_{0 \to 2}$ ($\rho \to 0$) | Passing through a corridor dot, pellet, or coin absorbs the excitation into actor energy. |
@@ -92,6 +94,9 @@ During `cc unfold`, the spatial lattice carries a real-time amplitude field $\Ps
 $$\mathcal{Q}_{\text{Cl}} = -(\nabla^2 \Psi)\Psi^{-1} = \underbrace{-\frac{\nabla^2 R}{R}}_{\text{Scalar Guidance } \langle \mathcal{Q}_{\text{Cl}} \rangle_0} - \underbrace{\left(2(\nabla \ln R)\mathcal{U}\nabla\widetilde{\mathcal{U}} + (\nabla^2 \mathcal{U})\widetilde{\mathcal{U}}\right)}_{\text{Bivector Spin-Torque } \langle \mathcal{Q}_{\text{Cl}} \rangle_2}$$
 
 * **Scale-Invariant Valley Guidance:** Because $\langle \mathcal{Q}_{\text{Cl}} \rangle_0 = -\nabla^2 R / R$ normalizes spatial curvature by amplitude, guidance depends solely on the *geometric form* of the environment rather than raw field magnitude.
+* **Bivector Spin-Torque Steering:** Autonomous holons sample the local potential gradient $-\nabla \langle \mathcal{Q}_{\text{Cl}} \rangle_0$, experiencing an active steering torque:
+  $$\Omega_{Q,i} = \mathbf{s}_i \wedge \left(-\nabla \langle \mathcal{Q}_{\text{Cl}} \rangle_0\right)$$
+  which steers heading rotors $U_i$ through open corridors and around barriers without graph-based pathfinding (e.g. A* or navmeshes).
 * **Continuous Boundary Impedance & Attractor Basins (`Model2D::build_continuous_qfield`):** Impermeable boundary contours clamp $R \to 0.08$, forming steep positive $\mathcal{Q}_{\text{Cl}}$ repeller ridges along walls and obstacles; semi-permeable contours set intermediate impedance ($R \to 0.60$); open corridors and active `FieldExcitation`s inject smooth amplitude domes ($R \to 1.25$), carving negative-$\mathcal{Q}_{\text{Cl}}$ guidance valleys without requiring a discrete tile grid.
 
 ---
@@ -104,8 +109,13 @@ $$\mathcal{Q}_{\text{Cl}} = -(\nabla^2 \Psi)\Psi^{-1} = \underbrace{-\frac{\nabl
 * **Why It Matters:** Gameplay recordings contain title screens, menus, iris transitions, and static HUD bars that corrupt odometry if mixed with active playfield motion. Moreover, the compiler cannot pre-assume whether a game is a static arena, a horizontal side-scroller, or a vertical corridor shooter.
 * **How It Is Used:**
   1. `detect_playfield_segment` locates the longest contiguous active scene sharing a stable border backdrop mode and applies a settle margin (`0.6s`) after scene cuts so transition frames never shift world origin coordinates.
-  2. `detect_camera_is_static` and `ScrollEstimator` evaluate 2D FFT cross-power phase correlation across the playfield band, refined to single-pixel registration via local SSAD (`refine_offset`). Near-zero drift ($\max |\Delta \mathbf{X}_{\text{cam}}| \le 4\text{ px}$) selects `Ortho2D-Static`; translational flow selects `Ortho2D-Scroll` governed by the PGA camera ego motor:
+  2. `detect_camera_is_static` and `ScrollEstimator` evaluate 2D FFT cross-correlation across the playfield band (with normalized phase correlation $C/|C|$ available in `push_both`), refined to single-pixel registration via local SSAD (`refine_offset`). Given consecutive frames $I_t$ and $I_{t+1}$, the frequency-domain cross-spectrum yields the displacement:
+     $$C(u, v) = \mathcal{F}[I_{t+1}](u, v) \cdot \mathcal{F}^*[I_t](u, v), \qquad \Delta \mathbf{X}_{\text{cam}} = \operatorname{argmax}_{(x, y)} \mathcal{F}^{-1}\left\{ C(u, v) \right\}$$
+     Near-zero drift ($\max |\Delta \mathbf{X}_{\text{cam}}| \le 4\text{ px}$) selects `Ortho2D-Static`; translational flow selects `Ortho2D-Scroll` governed by the PGA camera ego motor:
      $$M_{\text{ego}}(t) = \exp\left(-\frac{1}{2}(v_x e_{01} + v_y e_{02})\Delta t\right)$$
+  3. Static HUD overlays are partitioned by detecting regions of zero camera-relative variance, and ghost-free world panoramas are synthesized via quantized temporal mode accumulation over the registered camera trajectory:
+     $$A(\mathbf{x}) = \operatorname{mode}_{t} \left\{ I\left(\mathbf{x} - \mathbf{X}_{\text{cam}}(t),\, t\right) \right\}$$
+     which filters out transient foreground actors without procedural painting or inpainting artifacts.
 
 ### 4.2 Topological Boundary & Collectible Separation (`extract_2d_tiles_with`)
 * **Why It Matters:** Hardcoding RGB palettes for walls, pipes, or collectible dots overfits the compiler to a single game.

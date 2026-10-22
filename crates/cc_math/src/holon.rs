@@ -68,7 +68,8 @@ impl CliffordDensityElement {
         }
     }
 
-    /// Density $\rho = R^2 = \text{tr}(\rho_c)$ (bilinear invariant of the first kind).
+    /// [Bilinear Invariant of the First Kind: Process Density]
+    /// Density $\rho = R^2 = \text{tr}(\rho_c)$.
     #[inline]
     pub fn density(&self) -> f64 {
         self.amplitude * self.amplitude * self.idempotent.trace()
@@ -87,7 +88,7 @@ impl CliffordDensityElement {
         self.rotor = Mv2::even(half.cos(), -half.sin());
     }
 
-    /// Bilinear invariant of the first kind: directed unit heading vector
+    /// [Bilinear Invariant of the First Kind: Directed Spin / Heading Vector]
     /// $\mathbf{s} = U e_1 \widetilde{U} = (\cos\theta, \sin\theta)$ (Hiley eq. 4.5).
     #[inline]
     pub fn heading_vector(&self) -> [f64; 2] {
@@ -102,9 +103,9 @@ impl CliffordDensityElement {
         hy.atan2(hx)
     }
 
-    /// Bilinear invariant of the second kind: Bohm momentum $\mathbf{P}_B = \rho\, v_0\, \mathbf{s}$
-    /// (Hiley eq. 3.3, 4.15). Vanishes when the holon collapses to a passive/spent ideal
-    /// ($\rho = 0$).
+    /// [Bilinear Invariant of the Second Kind: Bohmian Momentum]
+    /// $\mathbf{P}_B = \rho\, v_0\, \mathbf{s}$ (Hiley eq. 3.3, 4.15). Vanishes when the holon collapses
+    /// to a passive/spent ideal ($\rho = 0$).
     #[inline]
     pub fn bohm_momentum(&self, speed: f64) -> [f64; 2] {
         let rho = self.density();
@@ -112,6 +113,7 @@ impl CliffordDensityElement {
         [rho * speed * hx, rho * speed * hy]
     }
 
+    /// [Active Information: Quantum Torque Steering]
     /// Steer the spinor rotor $U$ via the Quantum Torque induced by the Clifford
     /// Quantum Potential gradient $-\nabla \langle \mathcal{Q}_{\text{Cl}} \rangle_0$
     /// (Hiley eq. 5.18, 5.27):
@@ -124,9 +126,10 @@ impl CliffordDensityElement {
         }
         let gx = neg_grad_q[0] / gn;
         let gy = neg_grad_q[1] / gn;
-        // 2D wedge product (s ∧ g)_{12} = sx * gy - sy * gx
+        // Bivector spin-torque: \Omega_Q = s \wedge (-\nabla Q_Cl)
         let wedge_12 = sx * gy - sy * gx;
         let dtheta = gain * wedge_12;
+        // Rotor evolution under quantum torque: U <- U * exp(-0.5 * \Omega_Q * \Delta t)
         let delta_rotor = Mv2::even((0.5 * dtheta).cos(), -(0.5 * dtheta).sin());
         self.rotor = self.rotor.gp(delta_rotor);
         // Renormalize rotor to stay on Spin(2,0)
@@ -148,6 +151,7 @@ impl CliffordDensityElement {
         self.set_heading_angle(angle);
     }
 
+    /// [Primitive State Transitions: Incidence Sandwich Operator]
     /// Apply a state transition $T_{s \to s'} = \epsilon_{s'} M \epsilon_s$ within `basis`.
     pub fn transition_to(&mut self, target_state: u32, basis: &StateBasis) -> Option<TransitionOperator> {
         let to = basis.get(target_state)?;
@@ -163,8 +167,10 @@ impl CliffordDensityElement {
         Some(op)
     }
 
-    /// Reflect the holon's rotor across an oriented boundary normal $\hat{\mathbf{n}}$
-    /// and transition between patrol states $\epsilon_0 \leftrightarrow \epsilon_1$.
+    /// [Primitive State Idempotents & Incidence Transitions: Boundary Reflection]
+    /// Reflect the holon's heading vector across an oriented boundary normal $\hat{\mathbf{n}}$
+    /// ($\mathbf{s} \mapsto -\hat{\mathbf{n}}\mathbf{s}\hat{\mathbf{n}}$) and transition between
+    /// patrol states $\epsilon_0 \leftrightarrow \epsilon_1$.
     pub fn reflect_at_boundary(&mut self, normal: [f64; 2], basis: &StateBasis) {
         let [hx, hy] = self.heading_vector();
         let dot = hx * normal[0] + hy * normal[1];
@@ -177,6 +183,7 @@ impl CliffordDensityElement {
         }
     }
 
+    /// [Bilinear Invariant of the First Kind: Intrinsic Spinor Coherence]
     /// Algebraic spinor coherence $\langle \psi_i, \psi_j \rangle \in [0, 1]$ between
     /// two holons' intrinsic signatures (Active-GATr Term 2).
     pub fn signature_coherence(&self, other: &Self) -> f64 {

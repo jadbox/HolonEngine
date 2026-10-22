@@ -1,3 +1,4 @@
+//! [Primitive State Idempotents & Incidence Transitions]
 //! Primitive state idempotents and transition operators.
 //!
 //! Discrete actor states (small/super/raccoon, walk/flat/shell, patrol/alert/

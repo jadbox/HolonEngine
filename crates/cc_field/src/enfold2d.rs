@@ -232,6 +232,7 @@ impl Fft2 {
 }
 
 /// Phase-correlation shift estimator over a fixed viewport band.
+/// [Spectral Camera Discovery: 2D FFT Odometry]
 ///
 /// `push` returns the per-frame integer delta; accumulate for world offsets.
 pub struct ScrollEstimator {
@@ -689,6 +690,10 @@ impl Bucket {
 /// Each world pixel keeps a bounded palette of quantized colors; the final
 /// value is the mode, which suppresses moving actors far better than a
 /// channel-wise median (which produces ghost blends).
+/// [Spectral Scene Discovery: Quantized Temporal Mode Accumulation]
+///
+/// Accumulates per-pixel RGB histogram buckets across camera-registered frames
+/// and resolves the mode to filter moving actors without inpainting artifacts.
 pub struct AtlasAccumulator {
     /// Viewport rows included from each frame (`0..viewport_h`).
     pub viewport_h: usize,
@@ -754,6 +759,7 @@ impl AtlasAccumulator {
         }
     }
 
+    /// [Spectral Scene Discovery: Quantized Temporal Mode Panorama Synthesis]
     /// Resolve to a dense atlas. `origin` is the world coordinate of pixel (0,0).
     pub fn to_atlas(&self) -> WorldAtlas {
         let origin = self.min;
