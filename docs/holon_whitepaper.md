@@ -12,7 +12,7 @@
 1. **Atomistic State Machines (Traditional Engines):** Sealed structs sit inside an inert coordinate void, governed by hand-coded boolean flags and game-specific branching (`if is_pacman { eat_dot() } else if is_mario { stomp_goomba() }`).
 2. **Frame-by-Frame Neural Hallucination (Autoregressive Video Models):** Pixel buffers are predicted statistically per frame without persistent geometry, conservation laws, or object identity.
 
-`HolonEngine` implements a third architecture grounded in **David Bohm and Basil Hiley's Implicate Order** (*The Undivided Universe*; Hiley & Callaghan 2010, `docs/1011.4031_hiley_clifford_quantum_potential.pdf`) and **Projective Geometric Algebra ($\mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$)**:
+`HolonEngine` implements a third architecture grounded in **David Bohm and Basil Hiley's Implicate Order** (*The Undivided Universe*, 1993; Hiley & Callaghan, "The Clifford Algebra Approach to Quantum Mechanics", 2010) and **Projective Geometric Algebra ($\mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$)**:
 * **Enfoldment (`cc enfold`):** Compiles raw gameplay video into an invariant **Implicate World Model (`.cc`)**—extracting camera `Motor` odometry, ghost-free world panoramas, oriented PGA boundary blades, chromatic/semantic spinor signatures, and canonical actor processes without game-specific rules.
 * **Unfoldment (`cc unfold`):** Runs the compiled `.cc` model forward at thousands of hertz as a unified, zero-AI Clifford dynamical system where every entity is an algebraic process coupled to the surrounding spatial medium.
 

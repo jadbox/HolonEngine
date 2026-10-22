@@ -3,6 +3,8 @@
 
 <small>by [Jonathan Dunlap](https://www.linkedin.com/in/jonathandunlap/)</small>
 
+*Foundational ontology:* [Dzog philosophy](https://github.com/jadbox/dzog/blob/main/philosophy.md) — relation-first computing over continuous fields.
+
 ---
 
 ## I. The Double Trap of Modern Interactive Media & World Models
@@ -21,11 +23,21 @@ A single static image does not contain enough information to define space or cau
 ## II. Ontological Foundations
 
 ### 1. Enfoldment and Unfoldment (Bohm & Hiley)
-Following David Bohm and Basil Hiley (*The Undivided Universe*, `docs/1011.4031_hiley_clifford_quantum_potential.pdf`), observed video frames are *explicate* projections of an underlying **Implicate Order**—an algebra of process governed by non-commutative transitions $M_{A \to B} = \Psi_B \Psi_A^{-1}$ and Active Information $\mathcal{Q}_{\text{Cl}}$.
+Following David Bohm and Basil Hiley (*The Undivided Universe*, 1993; Hiley & Callaghan, "The Clifford Algebra Approach to Quantum Mechanics", 2010), observed video frames are *explicate* projections of an underlying **Implicate Order**—an algebra of process governed by non-commutative transitions $M_{A \to B} = \Psi_B \Psi_A^{-1}$ and Active Information $\mathcal{Q}_{\text{Cl}}$.
 * **Enfold (`cc enfold`):** Compiles a folder of video and text into its structural and dynamical invariants (3D PGA geometry, CFT vitality kernels, semantic spinors, and $\mathcal{Q}_{\text{Cl}}$ coupling rules).
 * **Unfold (`cc unfold`):** Runs the compiled model forward at hundreds of hertz as an interactive, playable world where user input steers the ego `Motor` and Active Information guides the environment.
 
-### 2. The Diagram vs. The Cliché (Disciplining Local AI)
+### 2. The Holon: Algebraic Primitive of Process (Koestler & Hiley)
+Coined by Arthur Koestler, a **holon** is simultaneously an autonomous whole and a constituent part. In David Bohm and Basil Hiley's process physics, reality is not a collection of independent particles in a passive spacetime container, but an unbroken flow (*the holomovement*). Space is not a pre-existing stage; it emerges from algebraic relationships (*pregeometry*).
+
+Mathematically, a holon is realized as a localized algebraic structure within a Clifford algebra:
+* **Primitive Idempotents as Generalized Points:** Classical geometry assumes static, zero-dimensional points. In an algebraic pre-space, there are no fundamental points. Instead, primitive idempotents ($\epsilon^2 = \epsilon$) act as "generalized points." Because an idempotent reproduces itself under multiplication, it represents a self-sustaining, stable process—a whole. Through non-commutative multiplication within the algebra, idempotents generate spatial order—operating as relational parts.
+* **Minimal Left Ideals & The Clifford Density Element (CDE):** Standard quantum mechanics relies on an external Hilbert space. Hiley removes this external space, mapping all physical state directly inside the algebra using minimal left ideals $\mathcal{I} = \mathcal{C}\ell\,\epsilon$. The Clifford Density Element $\rho_c = \Psi \widetilde{\Psi}$ completely characterizes the process using internal algebraic invariants (directed spin, process density, Bohm momentum), unifying the localized entity with its undivided global context.
+* **The Algebraic Tower (Hierarchy of Wholeness):** Real Clifford algebras form a structural hierarchy ($\mathcal{C}\ell_{0,1} \to \mathcal{C}\ell_{3,0} \to \mathcal{C}\ell_{1,3}$, and here $\mathbb{G}_{3,0,1} \otimes \mathbb{G}_{2,0}$). Higher-order algebras naturally enfold lower ones without destroying them, mirroring how complex holons encapsulate and build upon simpler ones throughout the implicate order.
+
+**Why this primitive matters:** Modern engines and world models treat entities as passive collections of coordinates and meshes placed inside an external Cartesian void. In `HolonEngine`, every entity—player, autonomous actor, wall, or projectile—is an algebraic holon. It carries its own stability conditions, internal state idempotents, and boundary blades. Space, collision, and behavior are not external checks; they emerge intrinsically from algebraic incidence and the gradient of Active Information ($\mathcal{Q}_{\text{Cl}}$).
+
+### 3. The Diagram vs. The Cliché (Disciplining Local AI)
 Gilles Deleuze observed that raw imagery is cluttered with statistical clichés, whereas a *diagram* extracts the underlying intensive forces and relations.
 * **The Rule of Non-Crutch AI:** Generative models never sit inside the frame-to-frame runtime loop. If a neural network hallucinates the next frame of a corridor, the world has no ontology.
 * **AI + Spectral Math as Ingest Compiler:**
@@ -55,7 +67,7 @@ A naive global 2D FFT across a perspective viewport fails because perspective pr
    Independent moving entities (guards, projectiles) have their foot depth $z_i(t)$ estimated from intersection with $\Pi_{\text{floor}}$. Each actor crop is unwarped into a canonical $64 \times 64$ rest frame before computing its 2D+t CFT kernel $\hat{K}_i(\mathbf{k}, \omega)$—cleanly separating spatial silhouette/albedo ($\mathbf{k}$) from periodic walk/attack harmonics ($\omega$). Discrete behavioral states (patrol, alert, attack, pain, dead; door closed/sliding/open) are represented as **Clifford Primitive Idempotents** ($\epsilon_s^2 = \epsilon_s$) connected by transition operators $T_{s \to s'} = \epsilon_{s'} M \epsilon_s$.
 
 ### 2. Relational Structure Discovery via Active-GATr
-Standard Geometric Algebra Transformers (`docs/2302.06594_geometric_clifford_algebra_networks.pdf`) operate on $\mathbb{G}_{3,0,1}$ multivectors using $\text{Pin}(3,0,1)$-equivariant linear layers and the geometric product. **Active-GATr** extends this to bind extracted video/text holons across time:
+Standard Geometric Algebra Transformers (Brehmer et al., "Geometric Clifford Algebra Networks", 2023) operate on $\mathbb{G}_{3,0,1}$ multivectors using $\text{Pin}(3,0,1)$-equivariant linear layers and the geometric product. **Active-GATr** extends this to bind extracted video/text holons across time:
 
 $$\mathcal{A}_{ij} = \text{Softmax}_j \Big( \alpha \langle q_i, k_j \rangle_{\mathbb{G}_{3,0,1}} + \beta \langle \psi_i, \psi_j \rangle_{\mathbb{G}_{2,0}} + \gamma \langle B_i \vee B_j \rangle_0 + \delta \langle \mathcal{Q}_{\text{Cl}}(i), \mathcal{Q}_{\text{Cl}}(j) \rangle \Big)$$
 
@@ -100,3 +112,4 @@ In $\mathbb{G}_{3,0,1}$, 2D side-scrollers and 3D corridor worlds share one math
 2. **AI Compiles, Math Runs:** `llama.cpp` (VLM + embeddings) runs only during `cc enfold`. `cc unfold` is a pure Rust Clifford runtime running at hundreds of hertz.
 3. **Geometry Is Explicit:** 3D space is modeled as exact $\mathbb{G}_{3,0,1}$ blades (`Plane` walls, `Line` rays/hinges, `Point` actors, `Motor` poses), never blurry neural latent tensors.
 4. **Guidance by Active Information:** Autonomous behaviors emerge from $\mathcal{Q}_{\text{Cl}} = -(\nabla^2 \Psi)\Psi^{-1}$ over the reconstructed space and semantic phase alignment.
+5. **Holons Over Objects:** Entities are self-contained algebraic processes ($\mathcal{C}\ell\,\epsilon$) generating space and interaction, rather than passive data records situated in an external coordinate void.
